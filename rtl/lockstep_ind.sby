@@ -1,0 +1,45 @@
+[tasks]
+d8
+d6
+d5
+d4
+d3
+d2
+d1
+cover
+stuffcover
+
+[options]
+d8: mode prove
+d6: mode prove
+d5: mode prove
+d4: mode prove
+d3: mode prove
+d2: mode prove
+d1: mode prove
+depth 14
+cover: mode cover
+cover: depth 40
+stuffcover: mode cover
+stuffcover: depth 40
+timeout 500
+
+[engines]
+smtbmc yices
+
+[script]
+stuffcover: read -define STUFF_COVER
+read -formal janus_hart.v
+read -formal lockstep_ind.sv
+stuffcover: chparam -set D 4 lockstep_ind
+d6: chparam -set D 6 lockstep_ind
+d5: chparam -set D 5 lockstep_ind
+d4: chparam -set D 4 lockstep_ind
+d3: chparam -set D 3 lockstep_ind
+d2: chparam -set D 2 lockstep_ind
+d1: chparam -set D 1 lockstep_ind
+prep -top lockstep_ind
+
+[files]
+janus_hart.v
+lockstep_ind.sv

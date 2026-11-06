@@ -1,0 +1,49 @@
+# Tiny Tapeout project information
+project:
+  title:        "Janus"
+  author:       "duydat291007"
+  discord:      ""      # optional
+  description:  "A protocol emulator that runs one whole-protocol program as any participant"
+  language:     "Verilog"
+  clock_hz:     50000000
+
+  tiles: "6x4"
+
+  top_module:  "tt_um_duydat291007_janus"
+
+  source_files:
+    - "janus_chip.v"
+    - "janus_hart.v"
+
+pinout:
+  # Inputs
+  ui[0]: "host SCK"
+  ui[1]: "host MOSI"
+  ui[2]: "host CSn"
+  ui[3]: ""
+  ui[4]: ""
+  ui[5]: ""
+  ui[6]: ""
+  ui[7]: ""
+
+  # Outputs
+  uo[0]: "host MISO"
+  uo[1]: "receive data waiting"
+  uo[2]: "violation seen"
+  uo[3]: "arbitration lost"
+  uo[4]: "hart 0 running"
+  uo[5]: "hart 1 running"
+  uo[6]: ""
+  uo[7]: ""
+
+  # Bidirectional pins
+  uio[0]: "protocol pin 0"
+  uio[1]: "protocol pin 1"
+  uio[2]: "protocol pin 2"
+  uio[3]: "protocol pin 3"
+  uio[4]: "protocol pin 4"
+  uio[5]: "protocol pin 5"
+  uio[6]: "protocol pin 6"
+  uio[7]: "protocol pin 7"
+
+yaml_version: 6
