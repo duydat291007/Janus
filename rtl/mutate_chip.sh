@@ -3,11 +3,13 @@
 export PATH="$HOME/oss-cad-suite/bin:$PATH"
 OUT="$HOME/janus-tools/build/chip"
 
+# Usage: mutant name sed-expression [file]. The file is janus_chip.v unless named.
 mutant() {
-    name="$1"; expr="$2"
-    sed -e "$expr" janus_chip.v > "$OUT/mut.v"
-    if cmp -s janus_chip.v "$OUT/mut.v"; then echo "NOT APPLIED $name"; return; fi
-    iverilog -g2012 -o "$OUT/mut.vvp" tb_chip.v "$OUT/mut.v" janus_hart.v 2> /dev/null \
+    name="$1"; expr="$2"; file="${3:-janus_chip.v}"
+    sed -e "$expr" "$file" > "$OUT/mut.v"
+    if cmp -s "$file" "$OUT/mut.v"; then echo "NOT APPLIED $name"; return; fi
+    if [ "$file" = janus_chip.v ]; then srcs="$OUT/mut.v janus_hart.v"; else srcs="janus_chip.v $OUT/mut.v"; fi
+    iverilog -g2012 -o "$OUT/mut.vvp" tb_chip.v $srcs 2> /dev/null \
         || { echo "NO COMPILE  $name"; return; }
     caught=0
     for script in "$OUT"/scripts/*.hex; do
@@ -33,4 +35,6 @@ mutant "open-drain mask ignored" 's/assign high = oe_c \& ov_c \& ~od_c;/assign 
 mutant "transmit control bits dropped" 's/\.tx_din({a0\[1:0\], in_byte})/.tx_din({2'"'"'b00, in_byte})/'
 mutant "program word byte order" 's/wire \[31:0\]  wdata = {b0, b1, b2, shift};/wire [31:0]  wdata = {shift, b2, b1, b0};/'
 mutant "write pulse hits every word" 's/wire en = wpulse \&\& waddr == w;/wire en = wpulse;/'
-mutant "hart 1 fetches with hart 0 pc" 's/wire \[31:0\]  ins1 = words\[{pc1, 5.d0} +: 32\];/wire [31:0]  ins1 = words[{pc0, 5'"'"'d0} +: 32];/'
+mutant "hart 1 fetches with hart 0 pc" 's/{32{sel1\[f\]}}/{32{sel0[f]}}/'
+mutant "fetch also reads the next word" 's/{32{sel0\[f\]}}/{32{sel0[f] | sel0[(f + 1) % 48]}}/'
+mutant "one-hot pc a tick late" 's/pc_sel <= 64.d1 << pc_r;/pc_sel <= 64'"'"'d1 << pc;/' janus_hart.v

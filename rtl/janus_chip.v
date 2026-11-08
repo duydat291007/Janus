@@ -63,7 +63,7 @@ module janus_unit (
     input  [7:0]  line,          // pin levels, in chip pin order
     output [7:0]  low,           // pins this hart pulls low
     output [7:0]  high,          // pins this hart drives high, push-pull only
-    output [5:0]  pc,
+    output [47:0] sel,           // pc as one-hot, one bit per program word
     input  [31:0] ins,
     input         reg_we,
     input  [3:0]  reg_addr,
@@ -97,6 +97,8 @@ module janus_unit (
     wire [7:0] tx_data, push_data, push_data2;
     wire       tx_empty, tx_full, tx_pop, tx_clear, rx_full, arb_lost;
     wire       rx_push, seen_push, seen_push2;
+    wire [63:0] pc_sel;
+    assign sel = pc_sel[47:0];   // there are 48 words; a pc past them fetches 0
 
     reg  [7:0] pending;
     reg        pending_valid;
@@ -107,7 +109,7 @@ module janus_unit (
     janus_hart hart (
         .clk(clk), .por(por), .rst(!run), .wire_in(in), .oe(oe), .ov(ov),
         .od_mask(od_mask), .base_role(role), .reset_pc(start), .addr_reg(addr),
-        .pc(pc), .ins(ins), .tx_valid(!tx_empty), .tx_ctl(tx_ctl), .tx_data(tx_data),
+        .pc(), .pc_sel(pc_sel), .ins(ins), .tx_valid(!tx_empty), .tx_ctl(tx_ctl), .tx_data(tx_data),
         .tx_pop(tx_pop), .tx_clear(tx_clear), .rx_push(rx_push), .seen_push(seen_push),
         .seen_push2(seen_push2), .push_data(push_data), .push_data2(push_data2),
         .violations(violations), .arb_lost(arb_lost),
@@ -194,7 +196,7 @@ module tt_um_duydat291007_janus (
     wire       empty0, empty1;
     // Reading an empty FIFO returns 0, not whatever is in its memory.
     wire [7:0] rd_head = h ? (empty1 ? 8'd0 : head1) : (empty0 ? 8'd0 : head0);
-    wire [5:0] pc0, pc1;
+    wire [47:0] sel0, sel1;
 
     // Program memory: one latch per bit, at about half the area of a flop with
     // its write mux. Load programs only while the harts that run them are
@@ -204,8 +206,19 @@ module tt_um_duydat291007_janus (
     wire [5:0]   waddr = a0[5:0];
     reg          we_d, wpulse;
     wire [1535:0] words;
-    wire [31:0]  ins0 = words[{pc0, 5'd0} +: 32];
-    wire [31:0]  ins1 = words[{pc1, 5'd0} +: 32];
+    // Each fetch is an AND-OR over the words, steered by the hart's one-hot
+    // pc. A binary pc would have each of its bits steer hundreds of muxes,
+    // which was the slowest path on the chip.
+    reg  [31:0]  ins0, ins1;
+    integer      f;
+    always @* begin
+        ins0 = 32'd0;
+        ins1 = 32'd0;
+        for (f = 0; f < 48; f = f + 1) begin
+            ins0 = ins0 | (words[32 * f +: 32] & {32{sel0[f]}});
+            ins1 = ins1 | (words[32 * f +: 32] & {32{sel1[f]}});
+        end
+    end
 
     always @(posedge clk) begin
         we_d <= prog_we && !por;
@@ -229,13 +242,13 @@ module tt_um_duydat291007_janus (
     assign line = loopback ? ~low : uio_in;
 
     janus_unit u0 (.clk(clk), .por(por), .run(run0), .line(line), .low(low0), .high(high0),
-        .pc(pc0), .ins(ins0), .reg_we(reg_we && !cmd[0]), .reg_addr(a0[3:0]),
+        .sel(sel0), .ins(ins0), .reg_we(reg_we && !cmd[0]), .reg_addr(a0[3:0]),
         .reg_data({b0, in_byte}), .tx_push(tx_we && !cmd[0]), .tx_din({a0[1:0], in_byte}),
         .rx_pop(rx_rd && !cmd[0]), .rx_head(head0), .rx_empty(empty0),
         .violations(viol0), .flags(flags0));
 
     janus_unit u1 (.clk(clk), .por(por), .run(run1), .line(line), .low(low1), .high(high1),
-        .pc(pc1), .ins(ins1), .reg_we(reg_we && cmd[0]), .reg_addr(a0[3:0]),
+        .sel(sel1), .ins(ins1), .reg_we(reg_we && cmd[0]), .reg_addr(a0[3:0]),
         .reg_data({b0, in_byte}), .tx_push(tx_we && cmd[0]), .tx_din({a0[1:0], in_byte}),
         .rx_pop(rx_rd && cmd[0]), .rx_head(head1), .rx_empty(empty1),
         .violations(viol1), .flags(flags1));

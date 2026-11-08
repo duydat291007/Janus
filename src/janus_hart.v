@@ -19,6 +19,7 @@ module janus_hart (
     input      [5:0]  reset_pc,
     input      [7:0]  addr_reg,
     output reg [5:0]  pc,
+    output reg [63:0] pc_sel,      // pc as one-hot, so a fetch is a narrow AND-OR
     input      [31:0] ins,
     input             tx_valid,
     input      [1:0]  tx_ctl,      // 0 data, 1 STOP, 2 RESTART
@@ -354,9 +355,6 @@ module janus_hart (
         rx_push_r = 1'b0;
         seen_push_r = 1'b0;
         seen_push2_r = 1'b0;
-        if (por) begin
-            for (j = 0; j < 6; j = j + 1) cfg[j] = 16'd0;
-        end else if (cfg_we) cfg[cfg_addr] = cfg_data;
 
         if (rst) begin
             s = S_BOOT;
@@ -668,9 +666,16 @@ module janus_hart (
                 end
             end
         end
+        // Written after the traps read it, so a write takes effect next tick
+        // and the host port is not in front of the trap logic. A host frame
+        // takes many ticks anyway, so the extra tick cannot be seen.
+        if (por) begin
+            for (j = 0; j < 6; j = j + 1) cfg[j] = 16'd0;
+        end else if (cfg_we) cfg[cfg_addr] = cfg_data;
         oe <= {4'd0, oe_r};
         ov <= {4'd0, ov_r};
         pc <= pc_r;
+        pc_sel <= 64'd1 << pc_r;
         tx_pop <= tx_pop_r;
         tx_clear <= tx_clear_r;
         rx_push <= rx_push_r;

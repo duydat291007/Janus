@@ -393,3 +393,42 @@ cocotb, chip tests, replay and proof all pass, and area is unchanged.
 
 `rtl/default_synth.sh` runs synthesis the default way, so the shipped sources
 are tested without local workarounds.
+
+### Second real flow run: setup timing
+
+The second run finished every stage, passing DRC, LVS and antenna checks with no
+hold violations. It failed setup at the typical corner, the only corner the flow
+treats as an error: worst slack -2.96 ns at 20 ns, with 101 endpoints failing.
+The slow corner was at -16.5 ns, and the fast corner passed.
+
+The sign-off reports showed two ways into the hart's long same-tick chain:
+
+- The fetch. Each bit of the binary `pc` steered hundreds of mux cells, so the
+  read took about 8 ns before the hart saw its instruction.
+- The trap configuration. `cfg` was written at the top of the clocked block and
+  read by the traps in the same tick, which put the reset pin and the host
+  port in front of the trap logic.
+
+Fixes, neither of which changes what a program does:
+
+- The hart also registers its pc as one-hot, `pc_sel`. Each fetch is then an
+  AND-OR over the 48 words, and each select bit drives 32 gates. A pc past
+  word 47 now fetches 0, where before it read off the end of the memory.
+- `cfg` is written after the traps read it, so a write takes effect one tick
+  later. The replay writes configuration only while the hart is held, the
+  proof never writes it, and a host frame takes many ticks.
+
+Local synthesis cannot see this. It has no wire or fanout model, and it put the
+chip at 11.4 ns before the change. Only the real flow measures it.
+
+Checks after the change: cocotb 2 of 2, 40 of 40 chip scenarios with 471 bytes,
+replay 98 harts, 55 of 55 Python tests, 11 of 11 sync bits, proof passing at
+`dwell` 4 and failing at 3 as before, all 8 coverage points, 18 of 18 hart bugs,
+16 of 16 proof bugs plus the expected survivor, and 20 of 20 chip bugs. The
+fetch bug was rewritten for the new read, and two more target it: a fetch that
+also reads the next word, and a one-hot pc a tick late. The replay feeds the
+hart its instruction directly, so only the chip tests can catch the second.
+Area estimate 246,717 um2, down from 256,778: the AND-OR is smaller than the
+mux tree. Default synthesis takes 6 s. Lint adds two warnings, both
+intentional: the binary pc is left unconnected in the chip, and the top 16
+bits of `pc_sel` are unused.
