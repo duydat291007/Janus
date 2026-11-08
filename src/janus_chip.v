@@ -41,18 +41,24 @@ module janus_fifo #(parameter W = 8, parameter LOG = 3) (
     assign empty = clear || wp == rp_next;
     assign full = (wp ^ rp) == {1'b1, {LOG{1'b0}}};
     assign dout = mem[rp_next[LOG-1:0]];
-    always @(posedge clk) begin
-        if (rst || clear) begin
+    // The pointers reset asynchronously, through the flops' own reset pins.
+    // With a synchronous reset, synthesis folded it into the increment logic
+    // in a form that gate-level simulation cannot resolve from X, so a pointer
+    // bit stayed X after reset. Silicon was unaffected; the simulation was not.
+    always @(posedge clk or posedge rst) begin
+        if (rst) begin
+            wp <= 0;
+            rp <= 0;
+        end else if (clear) begin
             wp <= 0;
             rp <= 0;
         end else begin
-            if (push && !full) begin
-                mem[wp[LOG-1:0]] <= din;
-                wp <= wp + 1'b1;
-            end
+            if (push && !full) wp <= wp + 1'b1;
             rp <= rp_next;
         end
     end
+    always @(posedge clk)
+        if (!rst && !clear && push && !full) mem[wp[LOG-1:0]] <= din;
 endmodule
 
 // One hart with its FIFOs, registers and pin rotation.

@@ -432,3 +432,33 @@ Area estimate 246,717 um2, down from 256,778: the AND-OR is smaller than the
 mux tree. Default synthesis takes 6 s. Lint adds two warnings, both
 intentional: the binary pc is left unconnected in the chip, and the top 16
 bits of `pc_sel` are unused.
+
+### Third real flow run: timing met
+
+The rebuild passed every flow stage and the Tiny Tapeout precheck. Setup slack
+at the typical corner is +0.52 ns, up from -2.96 ns, so the margin is thin. The
+slow corner improved from -16.5 to -11.1 ns; the flow does not check it. The
+run took 3 h 43 m, against 1 h 32 m before.
+
+The gate-level test failed twice. The first time, GitHub timed out serving the
+simulator download, so nothing ran. On the re-run, UART failed and I2C passed:
+a status byte read back over SPI held an X.
+
+Traced on the real netlist: the X came from one flop, bit 3 of hart 1's
+transmit FIFO write pointer, which never left X after reset. Synthesis had
+folded the synchronous reset into the increment logic as a choice selected by
+that same bit. Both choices are 0 during reset, but a simulator cannot know
+that while the select is X, so the bit stayed X. In silicon the flop holds a
+real value and resets correctly, so this was a simulation-only failure. A first
+guess, that unwritten FIFO memory was the source, was tested by zeroing that
+memory, and it was wrong.
+
+Fix: the FIFO pointers now reset asynchronously, through the flops' reset
+pins, so no logic sits between the reset and the flop. The memory write keeps
+its old condition in a separate block. Checked by synthesizing locally to the
+same CMOS5L cells and running the gate-level test: the old sources show the
+same stuck pointer bits, in two FIFOs, and fail; the new sources reset every
+pointer and pass 2 of 2. Also: 40 of 40 chip scenarios, 20 of 20 chip bugs,
+cocotb 2 of 2 on RTL, default synthesis 5 s. The hart is unchanged, so replay
+and proof results still apply. Lint adds `SYNCASYNCNET`, because `por` is now
+both an asynchronous and a synchronous reset; that is intended.
