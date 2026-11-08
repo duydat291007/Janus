@@ -380,3 +380,16 @@ intentional, 40 of 40 chip scenarios with 471 bytes, replay 98 harts, proof pass
 at `dwell` 4, 18 of 18 chip bugs, 55 of 55 Python tests, 11 of 11 sync bits,
 256,778 um2. The hart was not changed by this step apart from a lint comment, so
 the earlier hart and proof planted-bug results still apply.
+
+### First real flow run
+
+The first Tiny Tapeout GDS run failed after 2 h 43 m inside `Yosys.Synthesis`.
+FSM extraction tried to re-encode the hart's state register and wrote over a
+million transition lines. Local synthesis had always passed `-nofsm`, a setting
+that never reached the shipped sources. Reproduced locally: default synthesis on
+the old sources timed out at 600 s. Fixed by marking the register
+`fsm_encoding = "none"`, after which default synthesis finishes in 7 s. Lint,
+cocotb, chip tests, replay and proof all pass, and area is unchanged.
+
+`rtl/default_synth.sh` runs synthesis the default way, so the shipped sources
+are tested without local workarounds.

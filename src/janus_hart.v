@@ -99,7 +99,10 @@ module janus_hart (
     reg [7:0]  c_div, div_cnt;
 
     // Hart state
-    reg [3:0]  s;
+    // Keep synthesis from re-encoding this as a state machine. The blocking
+    // style lets one tick pass through several states, and FSM extraction
+    // then builds an enormous transition table and never finishes.
+    (* fsm_encoding = "none" *) reg [3:0] s;
     reg [3:0]  s1, pin, prev;
     reg [3:0]  armed;                  // pin levels when last sampled
     reg [1:0]  role;
