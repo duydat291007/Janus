@@ -532,3 +532,8 @@ The cells use about 31% of the tile, but the template placed them at 60%
 density. `PL_TARGET_DENSITY_PCT` is now 45, so cells spread over more of the
 tile and leave more room for wires. No logic changed. The heaviest wiring is
 the program memory: 1,536 latches, each feeding both harts' fetch logic.
+
+Result: the build at 45% density passed every job: the full flow at 25 MHz
+in 2 h 50 m (detailed routing converged), the Tiny Tapeout precheck, the
+gate-level test and the 3D viewer. This is the first build to pass all
+checks with the prescaler fix and asynchronous reset included.
