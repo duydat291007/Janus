@@ -579,3 +579,21 @@ gate-level 2 of 2, 18 of 18 hart bugs (one pattern retargeted), 20 of 20 chip
 bugs, 16 proof bugs plus the expected survivor, proof at `dwell` 4 passes and
 fails at 3, all 8 coverage points, 55 + 1 Python tests, 11 of 11 sync bits.
 These are logic-only figures; the real flow adds wires and the fetch.
+
+### 50 MHz closes; moving to 8x4 tiles and 64 words
+
+With the faster hart, a build at 50 MHz on 6x4 tiles passed every job: the
+full flow with timing, the Tiny Tapeout precheck, the gate-level test and the
+viewer. The same design at 25 MHz passed too.
+
+The organisers then confirmed 8x4 tiles as final, and the template's main
+branch moved to the `ttihp27a` actions. The design now uses 8x4, the CI files
+match the template, and program memory is back to 64 words, since the 48-word
+cut was made only for area. A new chip scenario runs a program from word 56,
+so the restored top words are used. The 48-instruction rule from the kill
+test stays as a separate design rule on program size.
+
+Checks: 32 + 8 + 16 Python tests, 44 of 44 chip scenarios with 511 bytes, 20
+of 20 chip bugs, replay 101 harts, cocotb 4 of 4 on RTL and on a local
+gate-level netlist with no flop left X after reset, default synthesis 6 s.
+The hart did not change, so its proof and planted-bug results stand.

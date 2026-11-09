@@ -225,6 +225,8 @@ def main():
             ticks=50 * 13)
         add("uart_witness", p.uart(50), "A", WITNESS, tx0=data, ticks=50 * 62)
         add("uart_at_address_20", p.uart(50), "A", "B", tx0=data, ticks=50 * 62, base=20)
+        # The top words of the 64-word memory: words 56 to 63.
+        add("uart_at_address_56", p.uart(50), "A", "B", tx0=data, ticks=50 * 62, base=56)
         add("uart_rotated_pins", p.uart(50), "A", "B", tx0=data, ticks=50 * 62, rot=3)
         for mode, (cpol, cpha) in enumerate(((0, 0), (0, 1), (1, 0), (1, 1))):
             add(f"spi_mode{mode}", p.spi(10, cpol, cpha), "C", "T",

@@ -36,5 +36,5 @@ mutant "transmit control bits dropped" 's/\.tx_din({a0\[1:0\], in_byte})/.tx_din
 mutant "program word byte order" 's/wire \[31:0\]  wdata = {b0, b1, b2, shift};/wire [31:0]  wdata = {shift, b2, b1, b0};/'
 mutant "write pulse hits every word" 's/wire en = wpulse \&\& waddr == w;/wire en = wpulse;/'
 mutant "hart 1 fetches with hart 0 pc" 's/{32{sel1\[f\]}}/{32{sel0[f]}}/'
-mutant "fetch also reads the next word" 's/{32{sel0\[f\]}}/{32{sel0[f] | sel0[(f + 1) % 48]}}/'
+mutant "fetch also reads the next word" 's/{32{sel0\[f\]}}/{32{sel0[f] | sel0[(f + 1) % 64]}}/'
 mutant "one-hot pc a tick late" 's/pc_sel <= 64.d1 << pc_r;/pc_sel <= 64'"'"'d1 << pc;/' janus_hart.v

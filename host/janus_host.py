@@ -27,7 +27,7 @@ CTL_DATA, CTL_STOP, CTL_RESTART = 0, 1, 2
 # Status flag bits, as returned by `status()`.
 FLAG_NAMES = ("rx_empty", "rx_full", "tx_empty", "tx_full", "arb_lost", "rx_overflow")
 
-PROGRAM_WORDS = 48
+PROGRAM_WORDS = 64
 
 
 # Frame builders. Each returns the bytes of one frame.

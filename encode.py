@@ -75,7 +75,7 @@ def encode(prog, ins, base=0):
 
 def assemble(prog, base=0):
     """Words for a program placed at address base; jump targets are absolute."""
-    assert base + len(prog.code) <= 48, prog.name  # program memory size
+    assert base + len(prog.code) <= 64, prog.name  # program memory size
     return [encode(prog, ins, base) for ins in prog.code]
 
 
