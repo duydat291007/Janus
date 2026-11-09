@@ -462,3 +462,20 @@ pointer and pass 2 of 2. Also: 40 of 40 chip scenarios, 20 of 20 chip bugs,
 cocotb 2 of 2 on RTL, default synthesis 5 s. The hart is unchanged, so replay
 and proof results still apply. Lint adds `SYNCASYNCNET`, because `por` is now
 both an asynchronous and a synchronous reset; that is intended.
+
+### Fourth real flow run: clock lowered to 25 MHz
+
+The build with the FIFO reset fix passed every check except setup timing at
+the typical corner, where 8 endpoints failed. The build before it had passed
+the same corner by only +0.52 ns. At 50 MHz the design sits on the edge, so
+small layout changes decide pass or fail, and each attempt takes about four
+hours.
+
+The target clock is now 25 MHz (`CLOCK_PERIOD` 40 in `src/config.json`,
+`clock_hz` in `info.yaml`). No logic changed. Janus counts time in clock
+ticks, so programs set `dwell` for the clock, and the model, replay, proof
+and tests are unaffected. Costs: one tick is 40 ns instead of 20 ns, the
+fastest protocol rates halve (SPI near 3 MHz instead of 6), and the host SCK
+limit of 1/8 of the clock becomes about 3.1 MHz. The slow corner, which was
+11 ns short at 50 MHz, may now pass too. Raising the clock again is future
+work: the remaining slow path is the hart's same-tick chain.
