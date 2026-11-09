@@ -5,7 +5,7 @@ project:
   discord:      ""      # optional
   description:  "A protocol emulator that runs one whole-protocol program as any participant"
   language:     "Verilog"
-  clock_hz:     25000000
+  clock_hz:     50000000
 
   tiles: "6x4"
 
