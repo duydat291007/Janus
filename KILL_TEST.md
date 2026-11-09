@@ -597,3 +597,35 @@ Checks: 32 + 8 + 16 Python tests, 44 of 44 chip scenarios with 511 bytes, 20
 of 20 chip bugs, replay 101 harts, cocotb 4 of 4 on RTL and on a local
 gate-level netlist with no flop left X after reset, default synthesis 6 s.
 The hart did not change, so its proof and planted-bug results stand.
+
+## Hold-out test: low-speed USB
+
+Fixed before any USB program was written. Low-speed USB is one of the
+organisers' stretch goals and was not considered when the ISA was designed.
+Scope is the packet layer at 1.5 Mbit/s: a differential pair, NRZI coding,
+bit stuffing after six ones, CRC5 and CRC16, and an SE0 end of packet.
+
+Stage 1 uses `janus.py` unchanged. As for CAN, the host may pre-compute NRZI,
+stuffing and CRCs for the sender and post-process captured bits for the
+receiver. PASS means rules 1, 3, 4 and 5 above, plus every case below:
+
+- A Janus host sends an OUT token and a DATA0 packet of 8 bytes; a reference
+  device answers ACK. An independent decoder reads every packet: PID, address,
+  endpoint, CRC5, data, CRC16 and EOP.
+- A reference host to a Janus device, and Janus to Janus, the same way.
+- The device answers within the turnaround window, and a Janus host that gets
+  no answer reports a timeout.
+- A sender whose clock is 1.5% fast or slow, on a full 8-byte data packet.
+- A witness flags a bit-stuffing violation (seven ones), a bad CRC16 and a
+  missing EOP, with no witness-specific code.
+- D+ and D- are complementary except during SE0, and the bus idles in J.
+
+Out of scope: enumeration, keep-alive, full speed, the electrical layer,
+suspend and resume, and hubs.
+
+Assumptions to check against the USB 2.0 specification, chapter 7, since the
+sources found do not state them: a reply within 2 to 7.5 bit times, a host
+timeout of 16 to 18 bit times, and a low-speed clock tolerance of 1.5%.
+
+If stage 1 fails, the failure stands. Stage 2 may then extend the ISA with
+features that are not USB-specific, and all earlier tests must still pass.
