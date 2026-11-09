@@ -517,3 +517,18 @@ at `dwell` 4 passes and fails at 3, 16 proof bugs plus the expected survivor,
 all 8 coverage points, default synthesis 6 s. The `stuffcover` task now
 finishes inside its time limit, so it reports the six points that only the
 free-program task reaches as unreached; it reaches both of its own at step 15.
+
+### Sixth real flow run: routing congestion, density lowered
+
+The build with the prescaler fix and asynchronous reset passed every stage up
+to detailed routing, then hit GitHub's six-hour job limit there. The router
+started with 18,652 violations, reached 7, and spent hours on "stubborn tiles"
+passes without clearing them. The passing 25 MHz build had started from the
+same state (18,467 violations, placement congestion 1.05 against 1.047) and
+happened to finish routing in two hours. So the design sits at the edge of
+routability, and build time varies widely between runs.
+
+The cells use about 31% of the tile, but the template placed them at 60%
+density. `PL_TARGET_DENSITY_PCT` is now 45, so cells spread over more of the
+tile and leave more room for wires. No logic changed. The heaviest wiring is
+the program memory: 1,536 latches, each feeding both harts' fetch logic.
