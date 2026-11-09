@@ -1,0 +1,290 @@
+<title>Janus Three Roles</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* Layout: an instrument panel. Controls, one shared waveform, then three
+     identical role panels side by side, each running the same listing. */
+  :root {
+    --bg: #f3f5f7;
+    --panel: #ffffff;
+    --fg: #17202a;
+    --muted: #5d6b79;
+    --rule: #d5dce3;
+    --grid: #e6ebf0;
+    --sender: #c2410c;
+    --receiver: #0f766e;
+    --witness: #6d28d9;
+    --bad: #b91c1c;
+    --bad-soft: #fde8e8;
+    --hi: #fff4d6;
+    --focus: #2563eb;
+    --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+    --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f151b; --panel: #161e26; --fg: #e4eaf0; --muted: #93a2b1;
+      --rule: #2a3643; --grid: #1f2a35; --sender: #fb923c; --receiver: #2dd4bf;
+      --witness: #a78bfa; --bad: #f87171; --bad-soft: #3a1717; --hi: #2e2a17;
+      --focus: #60a5fa; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f151b; --panel: #161e26; --fg: #e4eaf0; --muted: #93a2b1;
+    --rule: #2a3643; --grid: #1f2a35; --sender: #fb923c; --receiver: #2dd4bf;
+    --witness: #a78bfa; --bad: #f87171; --bad-soft: #3a1717; --hi: #2e2a17;
+    --focus: #60a5fa; color-scheme: dark;
+  }
+  body {
+    background: var(--bg); color: var(--fg); font-family: var(--font-body);
+    font-size: 15px; line-height: 1.5;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 28px 40px;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 20px; }
+  h1 {
+    font-family: var(--font-display); font-weight: 700; font-size: clamp(28px, 4vw, 40px);
+    line-height: 1.1; margin: 0; letter-spacing: -0.01em; text-wrap: balance;
+  }
+  .lead { margin: 6px 0 0; color: var(--muted); max-width: 68ch; }
+  .lead b { color: var(--fg); font-weight: 600; }
+
+  .controls {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px;
+  }
+  .seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 5px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; }
+  .seg button + button { border-left: 1px solid var(--rule); }
+  button {
+    font: 500 14px var(--font-body); color: var(--fg); background: var(--panel);
+    border: 1px solid var(--rule); border-radius: 5px; padding: 6px 12px; cursor: pointer;
+  }
+  button:hover { background: var(--grid); }
+  button[aria-pressed="true"] { background: var(--fg); color: var(--panel); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .speed { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+  .speed input { width: 110px; }
+  .tick { margin-left: auto; font-family: var(--font-mono); font-size: 13px; color: var(--muted);
+          font-variant-numeric: tabular-nums; }
+
+  .scope { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px 8px; }
+  .scope-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+                font-size: 13px; color: var(--muted); }
+  .scope-head strong { color: var(--fg); font-family: var(--font-mono); font-weight: 600; }
+  .scope-wrap { overflow-x: auto; }
+  canvas { display: block; width: 100%; height: 132px; min-width: 560px; cursor: crosshair; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 5px; }
+
+  .roles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+  @media (max-width: 860px) { .roles { grid-template-columns: minmax(0, 1fr); } }
+  .role { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px;
+          border-top: 4px solid var(--c); display: grid; gap: 10px; padding: 12px 14px 14px; min-width: 0; }
+  .role h2 { margin: 0; font: 600 18px var(--font-display); display: flex; align-items: baseline; gap: 8px; }
+  .role h2 span { font: 500 12px var(--font-mono); color: var(--c); letter-spacing: 0.04em; text-transform: uppercase; }
+  .status { display: flex; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+  .pill { font-family: var(--font-mono); font-size: 12px; padding: 2px 8px; border-radius: 999px;
+          border: 1px solid var(--rule); color: var(--muted); }
+  .pill.on { border-color: var(--c); color: var(--c); }
+  .pill.bad { border-color: var(--bad); background: var(--bad-soft); color: var(--bad); font-weight: 600; }
+  ol.code { list-style: none; margin: 0; padding: 0; font-family: var(--font-mono); font-size: 12.5px;
+            border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; }
+  ol.code li { display: grid; grid-template-columns: 2.2em minmax(0, 1fr); gap: 6px; padding: 3px 8px;
+               border-top: 1px solid var(--grid); }
+  ol.code li:first-child { border-top: 0; }
+  ol.code li .n { color: var(--muted); text-align: right; }
+  ol.code li .t { overflow-wrap: anywhere; }
+  ol.code li .lbl { color: var(--muted); }
+  ol.code li.cur { background: var(--hi); box-shadow: inset 3px 0 0 var(--c); }
+  .bytes { font-size: 13px; display: grid; gap: 4px; }
+  .bytes .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .bytes .v { font-family: var(--font-mono); min-height: 1.5em; overflow-wrap: anywhere; }
+  .bytes .v em { font-style: normal; color: var(--bad); font-weight: 600; }
+
+  .note { font-size: 13px; color: var(--muted); max-width: 80ch; }
+  .note a { color: var(--fg); }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>One program. Three roles.</h1>
+    <p class="lead">Three Janus harts run the <b>same eight-instruction UART program</b>. The role
+      register is the only difference: <b>A</b> sends, <b>B</b> receives, and the <b>witness</b> drives
+      nothing and checks everything. Switch to the glitch to see the checker catch a bad stop bit.</p>
+  </header>
+
+  <div class="controls" role="group" aria-label="Playback">
+    <button id="play" type="button">Play</button>
+    <button id="step" type="button">Step one tick</button>
+    <div class="seg" role="group" aria-label="Line">
+      <button id="runClean" type="button" aria-pressed="true">Clean line</button>
+      <button id="runFault" type="button" aria-pressed="false">Glitch on a stop bit</button>
+    </div>
+    <label class="speed" for="speed">Speed <input id="speed" type="range" min="5" max="120" value="30"></label>
+    <span class="tick" id="tick" aria-live="polite">tick 0</span>
+  </div>
+
+  <section class="scope" aria-label="TX line">
+    <div class="scope-head">
+      <span>The shared <strong>TX</strong> wire, one sample per tick. Click to jump.</span>
+      <span id="bitInfo"></span>
+    </div>
+    <div class="scope-wrap"><canvas id="wave" aria-label="Waveform of the TX line"></canvas></div>
+    <div class="legend">
+      <span><span class="sw" style="background: var(--fg)"></span>wire level so far</span>
+      <span id="glitchKey" hidden><span class="sw" style="background: var(--bad)"></span>glitch pulls the line low</span>
+      <span><span class="sw" style="background: var(--witness)"></span>a violation is flagged</span>
+    </div>
+  </section>
+
+  <section class="roles" id="roles"></section>
+
+  <p class="note">Every value on this page comes from the Janus Python model (<code>janus.py</code>),
+    recorded tick by tick by <code>demo/gen_demo.py</code>. The chip's Verilog matches that model tick
+    for tick on every recorded hart. A tick here is one UART step; the program uses 8 ticks per bit.
+    What a hart drives reaches the wire on the next tick, so "driving" can lead the line by one step.
+    Source: <a href="https://github.com/duydat291007/Janus">github.com/duydat291007/Janus</a>.</p>
+</div>
+
+<script>
+const D = /*DATA*/null;
+const ROLES = [
+  { key: "A", name: "Sender", tag: "role A", color: "--sender" },
+  { key: "B", name: "Receiver", tag: "role B", color: "--receiver" },
+  { key: "W", name: "Witness", tag: "witness", color: "--witness" },
+];
+let run = "clean", t = 100, playing = false, timer = null;
+
+const hex = b => "0x" + b.toString(16).toUpperCase().padStart(2, "0");
+const show = b => hex(b) + (b >= 32 && b < 127 ? " '" + String.fromCharCode(b) + "'" : "");
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+function buildRoles() {
+  const host = document.getElementById("roles");
+  host.innerHTML = "";
+  for (const r of ROLES) {
+    const el = document.createElement("article");
+    el.className = "role";
+    el.style.setProperty("--c", `var(${r.color})`);
+    el.innerHTML = `
+      <h2>${r.name} <span>${r.tag}</span></h2>
+      <div class="status"><span class="pill" data-k="drive"></span><span class="pill" data-k="viol"></span></div>
+      <ol class="code" aria-label="${r.name} program">${D.program.map(p => `
+        <li data-pc="${p.pc}"><span class="n">${p.pc}</span><span class="t">${p.label ? `<span class="lbl">${p.label}:</span> ` : ""}${p.text}</span></li>`).join("")}
+      </ol>
+      <div class="bytes"><span class="k" data-k="bytesLabel"></span><span class="v" data-k="bytes"></span></div>`;
+    el.dataset.role = r.key;
+    host.appendChild(el);
+  }
+}
+
+function render() {
+  const rows = D.runs[run], row = rows[t], clean = D.runs.clean[t];
+  document.getElementById("tick").textContent = `tick ${t} / ${rows.length - 1}`;
+  for (const r of ROLES) {
+    const el = document.querySelector(`.role[data-role="${r.key}"]`), h = row[r.key];
+    el.querySelectorAll("li").forEach(li => li.classList.toggle("cur", +li.dataset.pc === h.pc));
+    const drive = el.querySelector('[data-k="drive"]');
+    drive.textContent = h.drive == null ? "listening" : `driving ${h.drive}`;
+    drive.classList.toggle("on", h.drive != null);
+    const viol = el.querySelector('[data-k="viol"]');
+    viol.textContent = `${h.viol} violation${h.viol === 1 ? "" : "s"}`;
+    viol.classList.toggle("bad", h.viol > 0);
+    let label, bytes, ref;
+    if (r.key === "A") { label = "Bytes queued to send"; bytes = D.data; ref = D.data; }
+    else if (r.key === "B") { label = "Bytes received"; bytes = h.rx; ref = clean.B.rx; }
+    else { label = "Bytes seen on the line"; bytes = h.seen; ref = clean.W.seen; }
+    el.querySelector('[data-k="bytesLabel"]').textContent = label;
+    el.querySelector('[data-k="bytes"]').innerHTML = bytes.length
+      ? bytes.map((b, i) => (r.key !== "A" && ref[i] !== undefined && ref[i] !== b)
+          ? `<em title="the clean run got ${show(ref[i])}">${show(b)}</em>` : show(b)).join(", ")
+      : "none yet";
+  }
+  const bad = run === "fault" && row.W.viol > 0;
+  document.getElementById("bitInfo").innerHTML = bad
+    ? `<strong style="color: var(--bad)">Witness flagged a violation</strong>`
+    : `line is <strong>${row.wire}</strong>`;
+  drawWave();
+}
+
+function drawWave() {
+  const cv = document.getElementById("wave"), rows = D.runs[run];
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  const g = cv.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const left = 34, right = 8, top = 16, bot = 26, n = rows.length;
+  const x = i => left + (i / n) * (w - left - right);
+  const y = v => v ? top : h - bot;
+  g.font = `11px ${css("--font-mono")}`;
+  g.fillStyle = css("--muted");
+  g.fillText("1", 12, top + 4); g.fillText("0", 12, h - bot + 4);
+  g.strokeStyle = css("--grid"); g.lineWidth = 1;
+  for (let i = 0; i <= n; i += D.bit) { g.beginPath(); g.moveTo(x(i), top - 6); g.lineTo(x(i), h - bot + 6); g.stroke(); }
+  for (let i = 0; i <= n; i += 50) g.fillText(String(i), x(i) - 6, h - 6);
+  if (run === "fault") {
+    g.fillStyle = css("--bad-soft");
+    g.fillRect(x(D.glitch.start), top - 6, x(D.glitch.start + D.glitch.length) - x(D.glitch.start), h - bot - top + 12);
+  }
+  const trace = (from, to, color, width) => {
+    g.strokeStyle = color; g.lineWidth = width; g.beginPath();
+    for (let i = from; i <= to && i < n; i++) {
+      const v = rows[i].wire;
+      if (i === from) g.moveTo(x(i), y(v)); else g.lineTo(x(i), y(v));
+      g.lineTo(x(i + 1), y(v));
+    }
+    g.stroke();
+  };
+  trace(0, n - 1, css("--rule"), 1.5);
+  trace(0, t, css("--fg"), 2);
+  if (run === "fault") trace(D.glitch.start, Math.min(t, D.glitch.start + D.glitch.length - 1), css("--bad"), 2.5);
+  for (let i = 1; i < n && i <= t; i++) {
+    if (rows[i].W.viol > rows[i - 1].W.viol) {
+      g.fillStyle = css("--witness");
+      g.beginPath(); g.moveTo(x(i), top - 8); g.lineTo(x(i) - 5, top - 15); g.lineTo(x(i) + 5, top - 15); g.fill();
+    }
+  }
+  g.strokeStyle = css("--focus"); g.lineWidth = 1.5;
+  g.beginPath(); g.moveTo(x(t + 0.5), top - 8); g.lineTo(x(t + 0.5), h - bot + 8); g.stroke();
+}
+
+function setRun(name) {
+  run = name;
+  document.getElementById("runClean").setAttribute("aria-pressed", String(name === "clean"));
+  document.getElementById("runFault").setAttribute("aria-pressed", String(name === "fault"));
+  document.getElementById("glitchKey").hidden = name !== "fault";
+  render();
+}
+function step() { t = (t + 1) % D.runs[run].length; render(); }
+function setPlaying(on) {
+  playing = on;
+  document.getElementById("play").textContent = on ? "Pause" : "Play";
+  clearInterval(timer);
+  if (on) timer = setInterval(step, 1000 / +document.getElementById("speed").value);
+}
+
+document.getElementById("play").addEventListener("click", () => setPlaying(!playing));
+document.getElementById("step").addEventListener("click", () => { setPlaying(false); step(); });
+document.getElementById("runClean").addEventListener("click", () => setRun("clean"));
+document.getElementById("runFault").addEventListener("click", () => setRun("fault"));
+document.getElementById("speed").addEventListener("input", () => { if (playing) setPlaying(true); });
+document.getElementById("wave").addEventListener("click", e => {
+  const cv = e.currentTarget, r = cv.getBoundingClientRect(), n = D.runs[run].length;
+  const i = Math.floor(((e.clientX - r.left - 34) / (r.width - 42)) * n);
+  t = Math.max(0, Math.min(n - 1, i)); render();
+});
+window.addEventListener("resize", drawWave);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawWave);
+new MutationObserver(drawWave).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+buildRoles();
+render();
+if (document.fonts) document.fonts.ready.then(drawWave);
+</script>
