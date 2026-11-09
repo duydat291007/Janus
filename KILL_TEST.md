@@ -629,3 +629,22 @@ timeout of 16 to 18 bit times, and a low-speed clock tolerance of 1.5%.
 
 If stage 1 fails, the failure stands. Stage 2 may then extend the ISA with
 features that are not USB-specific, and all earlier tests must still pass.
+
+### Hold-out result, stage 1
+
+Stage 1 FAILED at the first case. With the host pre-coding NRZI, stuffing and
+CRCs, a Janus host sent an OUT token and a DATA0 packet; the reference decoder
+found 0 packets, and the line was never once in state K. A timed `bits`
+instruction drives one pin and `set` drives only a constant, and no
+instruction branches on the bits being sent, so no program can drive D- as
+the complement of data on D+. Every later case depends on a valid K state, so
+none can pass either. Run `python test_usb.py`.
+
+The reference side was checked first: CRC5 matches the published USB example
+(address 0x15, endpoint 0xE gives 0x17), CRC16 matches the CRC-16/USB
+catalogue check value 0xB4C8 once bit order is accounted for, and the decoder
+recovers a token and an 8-byte data packet sent by the reference sender.
+
+What stage 2 would need, all generic: a complementary pin pair, NRZI line
+coding, stuffing of ones only (HDLC and USB both use it), and CRCs that start
+from all ones and are sent inverted, which most serial CRCs do.

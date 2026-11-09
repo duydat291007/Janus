@@ -616,3 +616,182 @@ def decode_can(trace, bit):
             parser, recessive = None, 0
             i += 1
     return frames
+
+
+# Low-speed USB, packet layer. Written from USB 2.0 chapters 7 and 8: NRZI
+# (a 0 is a transition, a 1 is none), a stuffed 0 after six 1s, LSB first,
+# CRC5 and CRC16 sent inverted, and an SE0 end of packet. Low-speed J is D+ low
+# and D- high; K is the reverse; SE0 is both low.
+
+PID_OUT, PID_IN, PID_SETUP = 0x1, 0x9, 0xD
+PID_DATA0, PID_DATA1, PID_ACK, PID_NAK = 0x3, 0xB, 0x2, 0xA
+J, K, SE0 = (0, 1), (1, 0), (0, 0)
+
+
+def usb_crc5(bits):
+    crc = 0x1F
+    for bit in bits:
+        feedback = bit ^ (crc >> 4 & 1)
+        crc = (crc << 1) & 0x1F
+        if feedback:
+            crc ^= 0x05
+    return crc ^ 0x1F
+
+
+def usb_crc16(data):
+    crc = 0xFFFF
+    for byte in data:
+        for i in range(8):
+            feedback = (byte >> i & 1) ^ (crc >> 15 & 1)
+            crc = (crc << 1) & 0xFFFF
+            if feedback:
+                crc ^= 0x8005
+    return crc ^ 0xFFFF
+
+
+def _lsb(value, n):
+    return [value >> i & 1 for i in range(n)]
+
+
+def usb_packet_bits(pid, addr=None, endp=None, data=None, crc16_xor=0):
+    """Unstuffed bits after SYNC: PID and its complement, then the fields."""
+    bits = _lsb(pid | (~pid & 0xF) << 4, 8)
+    if addr is not None:
+        fields = _lsb(addr, 7) + _lsb(endp, 4)
+        crc = usb_crc5(fields)
+        bits += fields + [crc >> (4 - i) & 1 for i in range(5)]
+    if data is not None:
+        for byte in data:
+            bits += _lsb(byte, 8)
+        crc = usb_crc16(data) ^ crc16_xor
+        bits += [crc >> (15 - i) & 1 for i in range(16)]
+    return bits
+
+
+def usb_stuff(bits):
+    out, ones = [], 0
+    for bit in bits:
+        out.append(bit)
+        ones = ones + 1 if bit else 0
+        if ones == 6:
+            out.append(0)
+            ones = 0
+    return out
+
+
+def usb_line(bits, stuff=True, eop=True):
+    """Line states for a packet: SYNC, NRZI-coded stuffed bits, then EOP."""
+    sync = [0] * 7 + [1]
+    body = sync + (usb_stuff(bits) if stuff else bits)
+    states, level = [], J
+    for bit in body:
+        if bit == 0:
+            level = K if level == J else J
+        states.append(level)
+    if eop:
+        states += [SE0, SE0, J]
+    return states
+
+
+class UsbBus:
+    """The two USB wires with pull resistors: undriven, D+ reads 0 and D- 1."""
+
+    PULL = {"DP": 0, "DM": 1}
+
+    def __init__(self):
+        self.pins = {"DP": False, "DM": False}
+        self.agents, self.trace = [], []
+        self.wire = dict(self.PULL)
+        self.contentions = 0
+
+    def add(self, *agents):
+        self.agents.extend(agents)
+
+    def tick(self):
+        for pin in self.pins:
+            drives = [a.out[pin] for a in self.agents if a.out.get(pin) is not None]
+            if len(set(drives)) > 1:
+                self.contentions += 1
+            self.wire[pin] = drives[0] if drives else self.PULL[pin]
+        self.trace.append(dict(self.wire))
+        for agent in self.agents:
+            agent.tick()
+
+    def run(self, ticks):
+        for _ in range(ticks):
+            self.tick()
+
+
+class UsbSender(Agent):
+    """Drives packets with fractional bit lengths, then releases the wires."""
+
+    def __init__(self, bus, packets, bit, gap=20):
+        super().__init__(bus)
+        self.gen = self._go(packets, bit, gap)
+
+    def _go(self, packets, bit, gap):
+        total, done = 0.0, 0
+        for states in packets:
+            for dp, dm in states:
+                self.out["DP"], self.out["DM"] = dp, dm
+                total += bit
+                ticks = round(total) - done
+                done += ticks
+                yield from _wait(ticks)
+            self.out = {}
+            yield from _wait(gap)
+            done += gap
+            total += gap
+
+
+def usb_decode(trace, bit):
+    """Offline decoder: finds SYNC, samples mid-bit, undoes NRZI and stuffing,
+    and parses each packet. Flags stuffing errors, bad CRCs and a missing EOP."""
+    packets, i, n = [], 0, len(trace)
+    state = lambda t: (trace[t]["DP"], trace[t]["DM"])
+    while i < n:
+        if state(i) != K:          # SYNC starts with a J to K transition
+            i += 1
+            continue
+        start, level, bits, ones = i, J, [], 0
+        stuff_error, eop, k = False, False, 0
+        while True:
+            t = start + round(k * bit + bit / 2)
+            if t >= n:
+                break
+            now = state(t)
+            if now == SE0:
+                eop = t + round(bit) < n and state(t + round(bit)) == SE0
+                i = t + 2 * round(bit)
+                break
+            bit_value = 1 if now == level else 0
+            level = now
+            k += 1
+            if ones == 6:
+                if bit_value == 1:
+                    stuff_error = True
+                ones = 0
+                continue
+            bits.append(bit_value)
+            ones = ones + 1 if bit_value else 0
+        else:
+            i = n
+        if len(bits) < 16 or bits[:8] != [0] * 7 + [1]:
+            i = max(i, start + 1)
+            continue
+        body = bits[8:]
+        value = lambda a, w: sum(body[a + j] << j for j in range(w))
+        pid, check = value(0, 4), value(4, 4)
+        packet = {"pid": pid, "pid_ok": check == (~pid & 0xF), "eop": eop,
+                  "stuff_error": stuff_error, "start": start}
+        if pid in (PID_OUT, PID_IN, PID_SETUP) and len(body) >= 24:
+            fields = body[8:19]
+            crc = sum(body[19 + j] << (4 - j) for j in range(5))
+            packet.update(addr=value(8, 7), endp=value(15, 4), crc_ok=usb_crc5(fields) == crc)
+        elif pid in (PID_DATA0, PID_DATA1) and len(body) >= 24:
+            nbytes = (len(body) - 24) // 8
+            data = [value(8 + 8 * b, 8) for b in range(nbytes)]
+            crc = sum(body[8 + 8 * nbytes + j] << (15 - j) for j in range(16))
+            packet.update(data=data, crc_ok=usb_crc16(data) == crc)
+        packets.append(packet)
+    return packets
