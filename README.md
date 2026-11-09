@@ -15,6 +15,9 @@ peripheral, or a witness that checks the traffic without driving anything.
 | `src/` | The chip: `janus_chip.v` (top, FIFOs, host port) and `janus_hart.v` |
 | `test/` | cocotb tests the Tiny Tapeout flow runs on RTL and gates |
 | `docs/info.md` | Datasheet page, including the host port |
+| `docs/ISA.md` | Instruction set reference: encodings, traps, timing rules, toolchain |
+| `host/` | Host driver for a PC or a MicroPython board, with an example |
+| `demo/` | Interactive demo page built from model traces |
 | `janus.py`, `protocols.py`, `encode.py` | The model, the five protocol programs, and the assembler |
 | `test_*.py`, `reference.py` | Model tests against independent reference devices |
 | `check_sync.py` | Static checker for the `sync` rule |
@@ -26,11 +29,13 @@ peripheral, or a witness that checks the traffic without driving anything.
 
 ## Status
 
-Everything below was checked in simulation or by formal proof. The design has
-not yet been through placement and routing unless the GDS action shows it.
+The design passes the full Tiny Tapeout flow, precheck and gate-level test.
+Everything below was checked in simulation or by formal proof.
 
-- UART, SPI, I2C, 1-Wire and CAN base frames run end to end through the host port.
-- The Verilog matches the Python model tick for tick.
+- UART, SPI, I2C, 1-Wire and CAN base frames run end to end through the host port,
+  and 1-Wire also at real 1 us timing using the prescaler.
+- The Verilog matches the Python model tick for tick, and clock for clock with
+  the prescaler set.
 - An unbounded proof covers timed bits, `sync`, stuffing and CRC on the real
   Verilog, for every program in that subset. It does not yet cover clocked bits,
   traps, `claim`, `choice`, `match`, arbitration, resync or witnesses, so no
@@ -55,6 +60,11 @@ and fetches the cell library. Then, from `rtl/`:
 ```
 bash chip.sh test
 bash run.sh replay
+bash div_replay.sh
 bash prove_ind.sh d4
+bash final_check.sh     # every planted-bug set and proof task
 bash chip.sh synth
 ```
+
+The cocotb tests run from `test/` with `make`, and drive the chip through the
+same host driver a microcontroller uses.

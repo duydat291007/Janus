@@ -38,6 +38,10 @@ the right line.
 To try it, load a UART program, give hart 0 role 0 and hart 1 role 1, select
 loopback, run both, push a byte to hart 0, and read it back from hart 1.
 
+The project repository has a host driver for MicroPython boards (`host/`), with
+this exact example in `host/example_loopback.py`, and the full instruction set
+in `docs/ISA.md`.
+
 ## External hardware
 
 A host that can speak SPI, such as a microcontroller. Open-drain protocols need
