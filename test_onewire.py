@@ -22,8 +22,8 @@ def case(fn):
     return fn
 
 
-def build():
-    prog = protocols.onewire()
+def build(div=0):
+    prog = protocols.onewire(div)
     return prog, Bus(prog.pins)
 
 
@@ -33,6 +33,23 @@ def controller_queue(n):
 
 def expected_events(n):
     return ["R", "P", CMD, *ROM[:n]]
+
+
+@case
+def janus_pair_at_25mhz_real_timing():
+    """The same pair with the prescaler set for 1 us ticks at 25 MHz. The model
+    is unchanged by div; the RTL replay checks the chip at real timing."""
+    prog, bus = build(div=24)
+    c = Hart(prog, C, bus, tx=controller_queue(8))
+    t = Hart(prog, T, bus, tx=ROM)
+    w = Hart(prog, WITNESS, bus)
+    bus.add(c, t, w)
+    bus.run(1500 + SLOT * 80)
+    assert list(c.rx_q)[1:] == ROM, list(c.rx_q)
+    assert t.rx_q[0] == CMD, t.rx_q
+    assert list(w.seen)[1:] == [CMD, *ROM], list(w.seen)
+    assert w.violations == 0, w.violations
+    assert ref.decode_onewire(bus.trace) == expected_events(8)
 
 
 @case

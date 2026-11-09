@@ -139,7 +139,7 @@ def model(prog, role0, role1, tx0=(), tx1=(), addr0=None, addr1=None, ticks=0):
 
 
 def scenario(out, name, prog, role0, role1, tx0=(), tx1=(), addr0=None, addr1=None,
-             ticks=0, base=0, rot=0, loopback=1, undriven_pin=False):
+             ticks=0, base=0, rot=0, loopback=1, undriven_pin=False, clocks_per_tick=1):
     h0, h1 = model(prog, role0, role1, tx0, tx1, addr0, addr1, ticks)
     assert not h0.tx_q and not h1.tx_q or role0 == "S", name
     s = Script()
@@ -159,7 +159,7 @@ def scenario(out, name, prog, role0, role1, tx0=(), tx1=(), addr0=None, addr1=No
     s.push(0, tx0)
     s.push(1, tx1)
     s.run(1, 1, loopback)
-    s.wait(ticks + MARGIN)
+    s.wait(ticks * clocks_per_tick + MARGIN)
     for hart, h in ((0, h0), (1, h1)):
         data = list(h.seen) if h.role == WITNESS and h.seen else list(h.rx_q)
         s.expect_rx(hart, data)
@@ -239,6 +239,9 @@ def main():
         add("i2c_no_target", p.i2c(20), "C", "T", tx0=[0x20], addr1=0x42, ticks=800)
         add("onewire", p.onewire(), "C", "T", tx0=[0x33, 0xFF, 0xFF],
             tx1=[0x28, 0xC3], ticks=3500)
+        # Real 1-Wire timing at 25 MHz: the prescaler makes each tick 1 us.
+        add("onewire_25mhz_real_timing", p.onewire(24), "C", "T", tx0=[0x33, 0xFF, 0xFF],
+            tx1=[0x28, 0xC3], ticks=3500, clocks_per_tick=25)
         add("can_0_bytes", p.can(50), "S", "R", tx0=can_tx(0x123, []), ticks=50 * 70)
         add("can_5_bytes", p.can(50), "S", "R", tx0=can_tx(0x7F0, [1, 2, 3, 4, 5]),
             ticks=50 * 110)

@@ -69,7 +69,8 @@ def write_hart(hart, base):
     ticks = len(hart.rows)
     meta = [encode.ROLE[hart.rec_role], hart.rec_addr or 0, used << 8 | od, ticks & 0xFFFF,
             len(hart.start_tx), *encode.config_words(prog), hart.seen_hash,
-            hart.tx_hold & 0xFFFF, hart.tx_hold >> 16, ticks >> 16]
+            hart.tx_hold & 0xFFFF, hart.tx_hold >> 16, ticks >> 16,
+            hart.cfg["div"]]   # the prescaler the program leaves set
     with open(base + ".meta", "w") as f:
         f.writelines(f"{w:04x}\n" for w in meta)
 

@@ -9,7 +9,7 @@ OPS = ["set", "bits", "claim", "load", "store", "branch", "choice", "match",
        "counter", "mode"]
 CONDS = ["always", "last0", "last1", "count0", "loop", "crc_bad"]
 MODE_FIELDS = ["msb", "resync", "stuff", "poly", "width", "on_error", "lose_to",
-               "clk", "clk_owner", "cpol", "cpha", "lane2"]
+               "clk", "clk_owner", "cpol", "cpha", "lane2", "div"]
 ROLE = {"A": 0, "C": 0, "S": 0, "B": 1, "T": 1, "R": 1, ALL: 2, WITNESS: 3}
 LOSE_NONE = 2
 

@@ -117,7 +117,7 @@ class Prog:
 
     def mode(self, **fields):
         """Write configuration: msb, resync, stuff, poly, width, on_error,
-        lose_to, clk, clk_owner, cpol, cpha, lane2. A lose_to other than the
+        lose_to, clk, clk_owner, cpol, cpha, lane2, div. A lose_to other than the
         default is ROLE-DEPENDENT. Setting stuff above 0 restarts the coder.
         Hardware writes one field per instruction word, so this emits one
         instruction for each field."""
@@ -198,7 +198,7 @@ class Hart:
         self.crc, self.run_len, self.run_val = 0, 0, None
         self.cfg = dict(msb=False, resync=None, stuff=0, poly=0, width=0,
                         on_error=None, lose_to=WITNESS, clk=None, clk_owner=None,
-                        cpol=0, cpha=0, lane2=None)
+                        cpol=0, cpha=0, lane2=None, div=0)
         self.s1 = dict(bus.wire)
         self.pin = dict(bus.wire)
         self.armed = dict(bus.wire)  # pin levels when last sampled

@@ -14,9 +14,12 @@ module tb_replay;
     reg  [47:0] vec  [0:MAX_TICKS-1];
     reg  [47:0] v;
     integer     rptr = 0, i, ntx, nticks;
-    // +div=D runs the hart with prescaler D: each model tick then lasts D+1
-    // clocks, with inputs held, and outputs are compared at its end.
-    integer     div = 0, c;
+    // One model tick is one hart tick: the bench clocks until the hart has
+    // acted once, so a prescaler, whether set by +div=D or by the program,
+    // stretches the tick. Inputs are held across it and outputs compared at
+    // its end.
+    integer     div = 0, clocks, want, total = 0;
+    reg         acted;
     reg  [15:0] rx_h = 0, seen_h = 0;
     reg         cfg_we = 0;
     reg  [2:0]  cfg_addr = 0;
@@ -60,7 +63,12 @@ module tb_replay;
         for (i = 0; i < nticks; i = i + 1) begin
             v = vec[i];
             wire_in = v[47:40];
-            for (c = 0; c <= div; c = c + 1) begin
+            acted = 0;
+            clocks = 0;
+            want = dut.c_div + 1;   // a tick must last exactly this many clocks
+            while (!acted) begin
+                acted = dut.div_cnt == dut.c_div;   // the hart acts on this edge
+                clocks = clocks + 1;
                 @(posedge clk);
                 @(negedge clk);
                 if (rx_push) rx_h = rx_h * 31 + push_data;
@@ -68,6 +76,12 @@ module tb_replay;
                 if (seen_push2) seen_h = seen_h * 31 + push_data2;
                 if (tx_clear) rptr = ntx;
                 else if (tx_pop) rptr = rptr + 1;
+            end
+            total = total + clocks;
+            if (clocks != want) begin
+                $display("MISMATCH %0s tick %0d took %0d clocks, prescaler says %0d",
+                         base, i, clocks, want);
+                $finish;
             end
             if ((oe & pinmask) !== v[39:32] || (ov & oe & pinmask) !== v[31:24]
                     || violations !== v[23:16] || rx_h !== v[15:0]) begin
@@ -81,7 +95,11 @@ module tb_replay;
             $display("MISMATCH %0s seen hash %h/%h", base, seen_h, meta[11]);
             $finish;
         end
-        $display("OK %0d", nticks);
+        if (!div && dut.c_div !== meta[15][7:0]) begin
+            $display("MISMATCH %0s prescaler %0d/%0d", base, dut.c_div, meta[15][7:0]);
+            $finish;
+        end
+        $display("OK %0d ticks %0d clocks", nticks, total);
         $finish;
     end
 endmodule

@@ -119,6 +119,7 @@ module janus_hart (
 
     // Temporaries
     reg        fired, taken, is_data, src_const, fb, level;
+    reg [5:0]  fire_to;
     reg [11:0] diff;
     reg [15:0] tw;
     reg [7:0]  masked;
@@ -412,30 +413,44 @@ module janus_hart (
                 lf_valid = 1'b1;
             end
 
-            // Traps
+            // Traps. Decide first and change no state, then either fire or run
+            // the program. The program branch then reads the state from before
+            // the traps, so synthesis can build the two side by side instead of
+            // one after the other. The last trap to fire sets the target, as
+            // when each fired in turn.
             fired = 1'b0;
+            fire_to = 0;
             for (j = 0; j < 2; j = j + 1) begin
                 tw = (j == 0) ? cfg0 : cfg1;
                 if (!fired && tw[15] && prev[tw[7:6]] != tw[5] && pin[tw[7:6]] == tw[5]
-                        && (!tw[4] || pin[tw[2:1]] == tw[0]))
-                    fire(tw[14:9]);
+                        && (!tw[4] || pin[tw[2:1]] == tw[0])) begin
+                    fired = 1'b1;
+                    fire_to = tw[14:9];
+                end
             end
             tw = cfg2;
             if (tw[15]) begin
                 if (pin[tw[7:6]] == tw[5]) begin
                     if (held0 != 16'hFFFF) held0 = held0 + 1'b1;
                 end else held0 = 0;
-                if (held0 == cfg4) fire(tw[14:9]);
+                if (held0 == cfg4) begin
+                    fired = 1'b1;
+                    fire_to = tw[14:9];
+                end
             end
             tw = cfg3;
             if (tw[15]) begin
                 if (pin[tw[7:6]] == tw[5]) begin
                     if (held1 != 16'hFFFF) held1 = held1 + 1'b1;
                 end else held1 = 0;
-                if (held1 == cfg5) fire(tw[14:9]);
+                if (held1 == cfg5) begin
+                    fired = 1'b1;
+                    fire_to = tw[14:9];
+                end
             end
 
-            if (!fired) begin
+            if (fired) fire(fire_to);
+            else begin
                 // `now` wraps, so times are compared within half its range.
                 // Keep the stored times close, or a long idle makes an old
                 // edge look like a future one.
@@ -524,170 +539,174 @@ module janus_hart (
                         endcase
                     end
 
-                    if (s == S_CLAIM) begin
-                        if ((base_role == i_owner && tx_valid) || !pin[i_pin]) begin
-                            if (base_role == i_owner && ins[22])
-                                role = (tx_valid && pin[i_pin]) ? i_owner : ins[21:20];
-                            pc_r = pc_r + 1'b1;
-                            s = S_EXEC;
-                        end
-                    end
+                    // A tick runs either the clocked-bit states or the others, never
+                    // both, so they are built side by side rather than in series.
+                    if (s >= S_CK_ENTER && s <= S_CK_BS) begin
+                      if (s == S_CK_ENTER) begin
+                          if (!(is_mine(c_clk_own, role) && is_before(now, edge_t)))
+                              s = S_CK_TOP;
+                      end
 
-                    if (s == S_SYNC) begin
-                        if (!is_before(now, edge_t)) release_pin(i_pin);
-                        if (pin[i_pin] == val && armed[i_pin] != val) begin
-                            // A real change: set this bit's edge to the owner's.
-                            edge_t = now - 12'd2;
-                            s = S_MID;
-                        end else if (pin[i_pin] != val) armed[i_pin] = pin[i_pin];
-                    end
+                      if (s == S_CK_GAP) begin
+                          if (k != i_n) begin
+                              k = k + 1'b1;
+                              s = S_CK_TOP;
+                          end else begin
+                              partial = 0;
+                              if (!i_strm) finish;
+                              else begin
+                                  store_incoming;
+                                  if (is_mine(c_clk_own, role) && !tx_valid) finish;
+                                  else begin
+                                      refill;
+                                      k = 0;
+                                      s = S_CK_TOP;
+                                  end
+                              end
+                          end
+                      end
 
-                    if (s == S_EDGE) begin
-                        if (is_before(now, edge_t)) resync(!cur_mine);
-                        else begin
-                            if (is_before(edge_t, now)) edge_t = now;
-                            if (cur_mine) drive(i_pin, val);
-                            s = S_MID;
-                        end
-                    end
+                      if (s == S_CK_TOP) begin
+                          partial = k != 0;
+                          if (!c_cpha) lanes_out;
+                          cnt = i_dwell - 1'b1;
+                          s = S_CK_AW;
+                      end
 
-                    if (s == S_MID) begin
-                        if (is_before(now, edge_t + (i_dwell >> 1))) begin
-                            resync(!cur_mine);
-                            if (!cur_mine) release_pin(i_pin);
-                        end else begin
-                            if (!cur_mine) release_pin(i_pin);
-                            seen = pin[i_pin];
-                            armed = pin;
-                            edge_t = edge_t + i_dwell;
-                            src_const = src_eff[1];
-                            if (!src_const) shift_in(1'b0, seen);
-                            is_data = inserted || !src_const;
-                            s = S_POST;
-                            if (!cur_mine) begin
-                                if (src_const && seen != src_eff[0] && (inserted || !i_strm))
-                                    violations_r = violations_r + 1'b1;
-                            end else if (is_data) begin
-                                if (c_lose != LOSE_NONE && val && !seen)
-                                    lose(i_pin, 1'b0, 3'd0);
-                            end else s = S_SETTLE;
-                        end
-                    end
+                      if (s == S_CK_AW) begin
+                          level = !c_cpol;
+                          if (is_mine(c_clk_own, role)) begin
+                              if (cnt != 0) cnt = cnt - 1'b1;
+                              else begin
+                                  drive(c_clk, level);
+                                  s = S_CK_AS;
+                              end
+                          end else begin
+                              release_pin(c_clk);
+                              s = S_CK_AS;
+                          end
+                      end
 
-                    if (s == S_SETTLE) begin
-                        if (!(od_mask[i_pin] && pin[i_pin] != val)) s = S_POST;
-                    end
+                      if (s == S_CK_AS) begin
+                          level = !c_cpol;
+                          if (pin[c_clk] == level
+                                  || (is_mine(c_clk_own, role) && !od_mask[c_clk])) begin
+                              if (!c_cpha) sample_lanes;
+                              else lanes_out;
+                              cnt = i_dwell - 1'b1;
+                              s = S_CK_BW;
+                          end
+                      end
 
-                    if (s == S_POST) begin
-                        if (inserted) begin
-                            if (seen == saved) begin
-                                violations_r = violations_r + 1'b1;
-                                partial = 0;
-                                inserted = 1'b0;
-                                pc_r = c_err;
-                                s = S_FETCH;
-                            end else begin
-                                run_val = seen;
-                                run_valid = 1'b1;
-                                run_len = 1;
-                                bit_done;
-                            end
-                        end else if (c_stuff == 0) begin
-                            bit_done;
-                        end else begin
-                            fb = seen ^ crc[c_width - 1'b1];
-                            crc = {crc[14:0], 1'b0} & ~(16'hFFFF << c_width);
-                            if (fb) crc = crc ^ c_poly;
-                            run_len = (run_valid && seen == run_val) ? run_len + 1'b1 : 4'd1;
-                            run_val = seen;
-                            run_valid = 1'b1;
-                            if (run_len == c_stuff) begin
-                                inserted = 1'b1;
-                                stuff_bit = !seen;
-                                saved = seen;
-                                start_bit;
-                            end else bit_done;
-                        end
-                    end
+                      if (s == S_CK_BW) begin
+                          level = c_cpol;
+                          if (is_mine(c_clk_own, role)) begin
+                              if (cnt != 0) cnt = cnt - 1'b1;
+                              else begin
+                                  drive(c_clk, level);
+                                  s = S_CK_BS;
+                              end
+                          end else begin
+                              release_pin(c_clk);
+                              s = S_CK_BS;
+                          end
+                      end
 
-                    if (s == S_CK_ENTER) begin
-                        if (!(is_mine(c_clk_own, role) && is_before(now, edge_t)))
-                            s = S_CK_TOP;
-                    end
+                      if (s == S_CK_BS) begin
+                          level = c_cpol;
+                          if (pin[c_clk] == level
+                                  || (is_mine(c_clk_own, role) && !od_mask[c_clk])) begin
+                              if (c_cpha) sample_lanes;
+                              armed = pin;
+                              s = S_CK_GAP;
+                          end
+                      end
+                    end else begin
+                      if (s == S_CLAIM) begin
+                          if ((base_role == i_owner && tx_valid) || !pin[i_pin]) begin
+                              if (base_role == i_owner && ins[22])
+                                  role = (tx_valid && pin[i_pin]) ? i_owner : ins[21:20];
+                              pc_r = pc_r + 1'b1;
+                              s = S_EXEC;
+                          end
+                      end
 
-                    if (s == S_CK_GAP) begin
-                        if (k != i_n) begin
-                            k = k + 1'b1;
-                            s = S_CK_TOP;
-                        end else begin
-                            partial = 0;
-                            if (!i_strm) finish;
-                            else begin
-                                store_incoming;
-                                if (is_mine(c_clk_own, role) && !tx_valid) finish;
-                                else begin
-                                    refill;
-                                    k = 0;
-                                    s = S_CK_TOP;
-                                end
-                            end
-                        end
-                    end
+                      if (s == S_SYNC) begin
+                          if (!is_before(now, edge_t)) release_pin(i_pin);
+                          if (pin[i_pin] == val && armed[i_pin] != val) begin
+                              // A real change: set this bit's edge to the owner's.
+                              edge_t = now - 12'd2;
+                              s = S_MID;
+                          end else if (pin[i_pin] != val) armed[i_pin] = pin[i_pin];
+                      end
 
-                    if (s == S_CK_TOP) begin
-                        partial = k != 0;
-                        if (!c_cpha) lanes_out;
-                        cnt = i_dwell - 1'b1;
-                        s = S_CK_AW;
-                    end
+                      if (s == S_EDGE) begin
+                          if (is_before(now, edge_t)) resync(!cur_mine);
+                          else begin
+                              if (is_before(edge_t, now)) edge_t = now;
+                              if (cur_mine) drive(i_pin, val);
+                              s = S_MID;
+                          end
+                      end
 
-                    if (s == S_CK_AW) begin
-                        level = !c_cpol;
-                        if (is_mine(c_clk_own, role)) begin
-                            if (cnt != 0) cnt = cnt - 1'b1;
-                            else begin
-                                drive(c_clk, level);
-                                s = S_CK_AS;
-                            end
-                        end else begin
-                            release_pin(c_clk);
-                            s = S_CK_AS;
-                        end
-                    end
+                      if (s == S_MID) begin
+                          if (is_before(now, edge_t + (i_dwell >> 1))) begin
+                              resync(!cur_mine);
+                              if (!cur_mine) release_pin(i_pin);
+                          end else begin
+                              if (!cur_mine) release_pin(i_pin);
+                              seen = pin[i_pin];
+                              armed = pin;
+                              edge_t = edge_t + i_dwell;
+                              src_const = src_eff[1];
+                              if (!src_const) shift_in(1'b0, seen);
+                              is_data = inserted || !src_const;
+                              s = S_POST;
+                              if (!cur_mine) begin
+                                  if (src_const && seen != src_eff[0] && (inserted || !i_strm))
+                                      violations_r = violations_r + 1'b1;
+                              end else if (is_data) begin
+                                  if (c_lose != LOSE_NONE && val && !seen)
+                                      lose(i_pin, 1'b0, 3'd0);
+                              end else s = S_SETTLE;
+                          end
+                      end
 
-                    if (s == S_CK_AS) begin
-                        level = !c_cpol;
-                        if (pin[c_clk] == level
-                                || (is_mine(c_clk_own, role) && !od_mask[c_clk])) begin
-                            if (!c_cpha) sample_lanes;
-                            else lanes_out;
-                            cnt = i_dwell - 1'b1;
-                            s = S_CK_BW;
-                        end
-                    end
+                      if (s == S_SETTLE) begin
+                          if (!(od_mask[i_pin] && pin[i_pin] != val)) s = S_POST;
+                      end
 
-                    if (s == S_CK_BW) begin
-                        level = c_cpol;
-                        if (is_mine(c_clk_own, role)) begin
-                            if (cnt != 0) cnt = cnt - 1'b1;
-                            else begin
-                                drive(c_clk, level);
-                                s = S_CK_BS;
-                            end
-                        end else begin
-                            release_pin(c_clk);
-                            s = S_CK_BS;
-                        end
-                    end
-
-                    if (s == S_CK_BS) begin
-                        level = c_cpol;
-                        if (pin[c_clk] == level
-                                || (is_mine(c_clk_own, role) && !od_mask[c_clk])) begin
-                            if (c_cpha) sample_lanes;
-                            armed = pin;
-                            s = S_CK_GAP;
-                        end
+                      if (s == S_POST) begin
+                          if (inserted) begin
+                              if (seen == saved) begin
+                                  violations_r = violations_r + 1'b1;
+                                  partial = 0;
+                                  inserted = 1'b0;
+                                  pc_r = c_err;
+                                  s = S_FETCH;
+                              end else begin
+                                  run_val = seen;
+                                  run_valid = 1'b1;
+                                  run_len = 1;
+                                  bit_done;
+                              end
+                          end else if (c_stuff == 0) begin
+                              bit_done;
+                          end else begin
+                              fb = seen ^ crc[c_width - 1'b1];
+                              crc = {crc[14:0], 1'b0} & ~(16'hFFFF << c_width);
+                              if (fb) crc = crc ^ c_poly;
+                              run_len = (run_valid && seen == run_val) ? run_len + 1'b1 : 4'd1;
+                              run_val = seen;
+                              run_valid = 1'b1;
+                              if (run_len == c_stuff) begin
+                                  inserted = 1'b1;
+                                  stuff_bit = !seen;
+                                  saved = seen;
+                                  start_bit;
+                              end else bit_done;
+                          end
+                      end
                     end
                 end
             end

@@ -103,9 +103,13 @@ def i2c(half):
     return p
 
 
-def onewire():
-    """One tick is one microsecond."""
+def onewire(div=0):
+    """One tick is one microsecond. With a 25 MHz clock, div=24 makes it so:
+    the prescaler stretches each tick to div+1 clocks. The model counts in
+    ticks, so div changes nothing here; it only sets the chip's clock rate."""
     p = Prog("onewire", {"DQ": OPEN_DRAIN})
+    if div:
+        p.mode(div=div)
     p.hold_trap("DQ", 0, 130, "suspect")  # longer than any legal slot
     p.hold_trap("DQ", 0, 300, "reset")
 

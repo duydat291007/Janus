@@ -537,3 +537,45 @@ Result: the build at 45% density passed every job: the full flow at 25 MHz
 in 2 h 50 m (detailed routing converged), the Tiny Tapeout precheck, the
 gate-level test and the 3D viewer. This is the first build to pass all
 checks with the prescaler fix and asynchronous reset included.
+
+### 1-Wire at real timing
+
+The 1-Wire program counts one tick as one microsecond. Programs can now name
+the prescaler (`mode div=...`, field 12); the model accepts it and ignores it,
+since a model tick is a prescaled tick. `protocols.onewire(24)` sets 1 us ticks
+at 25 MHz. A new model test runs a Janus controller, target and witness at that
+setting against the reference decoder: 8 of 8 1-Wire tests pass.
+
+The replay bench now follows the hart's own ticks, so a program may set its
+own prescaler, and it checks the cadence: each tick must last exactly
+prescaler + 1 clocks, and the prescaler a hart ends with must match the
+model's. The three real-timing harts take 437,452 clocks for 17,500 ticks:
+two single-clock ticks, then 17,498 at 25 clocks. Planted bugs: a counter
+stepping by 2 fails at tick 2, and an ignored field 12 fails on the final
+prescaler. Two chip scenarios run the same exchange through the host port in
+loopback and on the pins, 42 of 42 chip scenarios in all. They show the
+transfer completes; the replay is what pins down the timing.
+
+### Speeding up the hart without changing behaviour
+
+At 50 MHz the clock had been limited by the hart's tick logic. Removing all
+same-tick fall-through, one state per tick, would cut the hart's logic delay
+only from 11.2 to 10.4 ns in local synthesis against the CMOS5L library, so
+the tick semantics were not the problem. The longest path showed two false
+paths instead, where synthesis chained logic that can never act in the same
+tick:
+
+- Traps changed the state the program logic then read, although the program
+  logic is skipped whenever a trap fires. Traps now decide first without
+  changing state, then either fire or the program runs. The last trap to fire
+  sets the target, as before. 11.2 to 9.9 ns.
+- After EXEC a tick runs either the clocked-bit states or the others, never
+  both, but they were written in series. They are now two branches. Down to
+  6.0 ns, 46% less than before, with 5% less area.
+
+Both are behaviour-preserving: replay 101 harts with cadence checks,
+prescaled replay at 1, 3 and 7, 42 chip scenarios, cocotb 2 of 2, local
+gate-level 2 of 2, 18 of 18 hart bugs (one pattern retargeted), 20 of 20 chip
+bugs, 16 proof bugs plus the expected survivor, proof at `dwell` 4 passes and
+fails at 3, all 8 coverage points, 55 + 1 Python tests, 11 of 11 sync bits.
+These are logic-only figures; the real flow adds wires and the fetch.
