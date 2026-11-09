@@ -131,7 +131,7 @@ module janus_unit (
 
     assign flags = {2'b00, overflow, arb_lost, tx_full, tx_empty, rx_full, rx_empty};
 
-    always @(posedge clk) begin
+    always @(posedge clk or posedge por) begin
         if (por) begin
             role <= 0;
             addr <= 0;
@@ -226,9 +226,14 @@ module tt_um_duydat291007_janus (
         end
     end
 
-    always @(posedge clk) begin
-        we_d <= prog_we && !por;
-        wpulse <= we_d && !por;
+    always @(posedge clk or posedge por) begin
+        if (por) begin
+            we_d <= 0;
+            wpulse <= 0;
+        end else begin
+            we_d <= prog_we;
+            wpulse <= we_d;
+        end
     end
 
     genvar w;
@@ -259,13 +264,19 @@ module tt_um_duydat291007_janus (
         .rx_pop(rx_rd && cmd[0]), .rx_head(head1), .rx_empty(empty1),
         .violations(viol1), .flags(flags1));
 
-    always @(posedge clk) begin
-        sck_s <= {sck_s[1:0], ui_in[0]};
-        mosi_s <= {mosi_s[0], ui_in[1]};
-        cs_s <= {cs_s[1:0], ui_in[2]};
+    // Power-on reset goes to the flops' reset pins throughout the chip, so no
+    // register depends on gate-level simulation resolving a synchronous reset.
+    always @(posedge clk or posedge por) begin
         if (por) begin
             sck_s <= 0;
+            mosi_s <= 0;
             cs_s <= 3'b111;
+            shift <= 0;
+            cmd <= 0;
+            a0 <= 0;
+            b0 <= 0;
+            b1 <= 0;
+            b2 <= 0;
             bits <= 0;
             index <= 0;
             miso <= 0;
@@ -274,11 +285,15 @@ module tt_um_duydat291007_janus (
             run0 <= 0;
             run1 <= 0;
             loopback <= 0;
-        end else if (!selected) begin
+        end else begin
+          sck_s <= {sck_s[1:0], ui_in[0]};
+          mosi_s <= {mosi_s[0], ui_in[1]};
+          cs_s <= {cs_s[1:0], ui_in[2]};
+          if (!selected) begin
             bits <= 0;
             index <= 0;
             reload <= 0;
-        end else begin
+          end else begin
             reload <= 0;
             if (reload) miso_sr <= rd_head;
             if (sck_rise) begin
@@ -312,6 +327,7 @@ module tt_um_duydat291007_janus (
                     if (index == 1) miso_sr <= h ? flags1 : flags0;
                 end
             end
+          end
         end
     end
 

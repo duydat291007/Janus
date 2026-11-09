@@ -5,8 +5,9 @@
 // runs like the Python generator, so a state can fall through into the next
 // one in the same tick. States are in order for that reason.
 //
-// Prescaling is not modelled in janus.py, so `div` is not exercised by the
-// equivalence vectors. It is here so the area figure includes it.
+// Prescaling is not modelled in janus.py. With prescaler D (mode field 12)
+// the hart acts on one clock in D+1 and holds still on the others, so it
+// matches the model with every tick D+1 clocks long. div_replay.sh checks it.
 module janus_hart (
     input             clk,
     input             por,         // power-on: clears traps; held off while loading
@@ -89,7 +90,7 @@ module janus_hart (
     wire [1:0]  i_party = ins[27:26];
 
     // Configuration
-    reg [15:0] cfg [0:5];
+    reg [15:0] cfg0, cfg1, cfg2, cfg3, cfg4, cfg5;   // traps 0-3, hold counts 4-5
     reg        c_msb, c_rs_en, c_cpol, c_cpha, c_l2_en;
     reg [1:0]  c_rs_pin, c_clk, c_l2_pin;
     reg [3:0]  c_stuff;
@@ -150,7 +151,7 @@ module janus_hart (
     // Everything the restricted program subset can never change from reset.
     assign dbg_clean = !c_rs_en && !lf_valid && c_lose == WITNESS
         && !c_l2_en && c_div == 0 && div_cnt == 0
-        && !cfg[0][15] && !cfg[1][15] && !cfg[2][15] && !cfg[3][15];
+        && !cfg0[15] && !cfg1[15] && !cfg2[15] && !cfg3[15];
 `endif
 
     function automatic is_mine(input [1:0] party, input [1:0] r);
@@ -349,7 +350,30 @@ module janus_hart (
         end
     endtask
 
-    always @(posedge clk) begin
+    // Power-on reset goes to the flops' reset pins. A synchronous reset is
+    // folded into each register's next-state logic, and gate-level simulation
+    // cannot always resolve that from X: a counter bit could stay X after
+    // reset. The synchronous rst branch then loads the real starting values.
+    always @(posedge clk or posedge por) begin
+      if (por) begin
+        oe_r = 0; ov_r = 0; pc_r = 0;
+        push_data_r = 0; push_data2_r = 0; violations_r = 0;
+        tx_pop_r = 0; tx_clear_r = 0; rx_push_r = 0;
+        seen_push_r = 0; seen_push2_r = 0; arb_lost_r = 0;
+        s = S_BOOT; s1 = 0; pin = 0; prev = 0; armed = 0; role = 0;
+        tx = 0; rx0 = 0; rx1 = 0; count = 0;
+        last = 0; seen = 0; saved = 0; val = 0; cur_mine = 0;
+        inserted = 0; stuff_bit = 0; run_valid = 0; run_val = 0;
+        k = 0; run_len = 0; partial = 0; src_eff = 0;
+        now = 0; edge_t = 0; last_fall = 0; lf_valid = 0;
+        crc = 0; held0 = 0; held1 = 0; cnt = 0; div_cnt = 0;
+        c_msb = 0; c_rs_en = 0; c_rs_pin = 0; c_stuff = 0; c_poly = 0;
+        c_width = 0; c_err = 0; c_lose = WITNESS; c_clk = 0; c_clk_own = 0;
+        c_cpol = 0; c_cpha = 0; c_l2_en = 0; c_l2_pin = 0; c_l2_own = 0; c_div = 0;
+        oe <= 0; ov <= 0; pc <= 0; pc_sel <= 64'd1;
+        tx_pop <= 0; tx_clear <= 0; rx_push <= 0; seen_push <= 0; seen_push2 <= 0;
+        push_data <= 0; push_data2 <= 0; violations <= 0; arb_lost <= 0;
+      end else begin
         tx_pop_r = 1'b0;
         tx_clear_r = 1'b0;
         rx_push_r = 1'b0;
@@ -373,14 +397,16 @@ module janus_hart (
             c_msb = 0; c_rs_en = 0; c_stuff = 0; c_poly = 0; c_width = 0; c_err = 0;
             c_lose = WITNESS; c_clk = 0; c_clk_own = 0; c_cpol = 0; c_cpha = 0;
             c_l2_en = 0; c_l2_pin = 0; c_l2_own = 0; c_div = 0;
+        end else if (div_cnt != c_div) begin
+            // Between prescaled ticks the hart holds still, so with prescaler
+            // D it behaves as the model does with each tick D+1 clocks long.
+            div_cnt = div_cnt + 1'b1;
         end else begin
+            div_cnt = 0;
             prev = pin;
             pin = s1;
             s1 = wire_in[3:0];
-            if (div_cnt == c_div) begin
-                div_cnt = 0;
-                now = now + 1'b1;
-            end else div_cnt = div_cnt + 1'b1;
+            now = now + 1'b1;
             if (c_rs_en && prev[c_rs_pin] && !pin[c_rs_pin]) begin
                 last_fall = now;
                 lf_valid = 1'b1;
@@ -389,24 +415,24 @@ module janus_hart (
             // Traps
             fired = 1'b0;
             for (j = 0; j < 2; j = j + 1) begin
-                tw = cfg[j];
+                tw = (j == 0) ? cfg0 : cfg1;
                 if (!fired && tw[15] && prev[tw[7:6]] != tw[5] && pin[tw[7:6]] == tw[5]
                         && (!tw[4] || pin[tw[2:1]] == tw[0]))
                     fire(tw[14:9]);
             end
-            tw = cfg[2];
+            tw = cfg2;
             if (tw[15]) begin
                 if (pin[tw[7:6]] == tw[5]) begin
                     if (held0 != 16'hFFFF) held0 = held0 + 1'b1;
                 end else held0 = 0;
-                if (held0 == cfg[4]) fire(tw[14:9]);
+                if (held0 == cfg4) fire(tw[14:9]);
             end
-            tw = cfg[3];
+            tw = cfg3;
             if (tw[15]) begin
                 if (pin[tw[7:6]] == tw[5]) begin
                     if (held1 != 16'hFFFF) held1 = held1 + 1'b1;
                 end else held1 = 0;
-                if (held1 == cfg[5]) fire(tw[14:9]);
+                if (held1 == cfg5) fire(tw[14:9]);
             end
 
             if (!fired) begin
@@ -666,12 +692,6 @@ module janus_hart (
                 end
             end
         end
-        // Written after the traps read it, so a write takes effect next tick
-        // and the host port is not in front of the trap logic. A host frame
-        // takes many ticks anyway, so the extra tick cannot be seen.
-        if (por) begin
-            for (j = 0; j < 6; j = j + 1) cfg[j] = 16'd0;
-        end else if (cfg_we) cfg[cfg_addr] = cfg_data;
         oe <= {4'd0, oe_r};
         ov <= {4'd0, ov_r};
         pc <= pc_r;
@@ -685,5 +705,25 @@ module janus_hart (
         push_data2 <= push_data2_r;
         violations <= violations_r;
         arb_lost <= arb_lost_r;
+      end
+    end
+
+    // Trap configuration. A write lands after this tick's traps have read the
+    // old value, so the host port is not in front of the trap logic. A host
+    // frame takes many ticks anyway, so the extra tick cannot be seen.
+    always @(posedge clk or posedge por) begin
+        if (por) begin
+            cfg0 <= 0; cfg1 <= 0; cfg2 <= 0; cfg3 <= 0; cfg4 <= 0; cfg5 <= 0;
+        end else if (cfg_we) begin
+            case (cfg_addr)
+                3'd0: cfg0 <= cfg_data;
+                3'd1: cfg1 <= cfg_data;
+                3'd2: cfg2 <= cfg_data;
+                3'd3: cfg3 <= cfg_data;
+                3'd4: cfg4 <= cfg_data;
+                3'd5: cfg5 <= cfg_data;
+                default: ;
+            endcase
+        end
     end
 endmodule

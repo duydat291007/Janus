@@ -14,6 +14,9 @@ module tb_replay;
     reg  [47:0] vec  [0:MAX_TICKS-1];
     reg  [47:0] v;
     integer     rptr = 0, i, ntx, nticks;
+    // +div=D runs the hart with prescaler D: each model tick then lasts D+1
+    // clocks, with inputs held, and outputs are compared at its end.
+    integer     div = 0, c;
     reg  [15:0] rx_h = 0, seen_h = 0;
     reg         cfg_we = 0;
     reg  [2:0]  cfg_addr = 0;
@@ -38,6 +41,7 @@ module tb_replay;
 
     initial begin
         if (!$value$plusargs("base=%s", base)) $finish;
+        if (!$value$plusargs("div=%d", div)) div = 0;
         $sformat(path, "%0s.prog", base); $readmemh(path, prog);
         $sformat(path, "%0s.meta", base); $readmemh(path, meta);
         $sformat(path, "%0s.tx", base);   $readmemh(path, txm);
@@ -52,16 +56,19 @@ module tb_replay;
         end
         @(negedge clk); cfg_we = 0;
         @(negedge clk); rst = 0;
+        if (div) dut.c_div = div;
         for (i = 0; i < nticks; i = i + 1) begin
             v = vec[i];
             wire_in = v[47:40];
-            @(posedge clk);
-            @(negedge clk);
-            if (rx_push) rx_h = rx_h * 31 + push_data;
-            if (seen_push) seen_h = seen_h * 31 + push_data;
-            if (seen_push2) seen_h = seen_h * 31 + push_data2;
-            if (tx_clear) rptr = ntx;
-            else if (tx_pop) rptr = rptr + 1;
+            for (c = 0; c <= div; c = c + 1) begin
+                @(posedge clk);
+                @(negedge clk);
+                if (rx_push) rx_h = rx_h * 31 + push_data;
+                if (seen_push) seen_h = seen_h * 31 + push_data;
+                if (seen_push2) seen_h = seen_h * 31 + push_data2;
+                if (tx_clear) rptr = ntx;
+                else if (tx_pop) rptr = rptr + 1;
+            end
             if ((oe & pinmask) !== v[39:32] || (ov & oe & pinmask) !== v[31:24]
                     || violations !== v[23:16] || rx_h !== v[15:0]) begin
                 $display("MISMATCH %0s tick %0d pc=%0d oe=%h/%h ov=%h/%h viol=%0d/%0d rx=%h/%h",

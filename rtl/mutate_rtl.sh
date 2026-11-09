@@ -31,7 +31,7 @@ mutant() {
 mutant "bit order of receive" 's/else      rx0 = c_msb ? {rx0\[6:0\], b} : {b, rx0\[7:1\]};/else      rx0 = c_msb ? {b, rx0[7:1]} : {rx0[6:0], b};/'
 mutant "no edge resync" 's/if (none \&\& lf_valid \&\&/if (1'"'"'b0 \&\&/'
 mutant "CRC never xors" 's/if (fb) crc = crc ^ c_poly;//'
-mutant "second width trap dead" 's/if (held1 == cfg\[5\]) fire(tw\[14:9\]);//'
+mutant "second width trap dead" 's/if (held1 == cfg5) fire(tw\[14:9\]);//'
 mutant "no timed arbitration" 's/lose(i_pin, 1'"'"'b0, 3'"'"'d0);/;/'
 mutant "free bits still checked" 's/seen != src_eff\[0\] \&\& (inserted || !i_strm)/seen != src_eff[0]/'
 mutant "sync input lag wrong" 's/edge_t = now - 12'"'"'d2;/edge_t = now - 12'"'"'d1;/'

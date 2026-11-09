@@ -479,3 +479,41 @@ fastest protocol rates halve (SPI near 3 MHz instead of 6), and the host SCK
 limit of 1/8 of the clock becomes about 3.1 MHz. The slow corner, which was
 11 ns short at 50 MHz, may now pass too. Raising the clock again is future
 work: the remaining slow path is the hart's same-tick chain.
+
+### Prescaler test, and power-on reset made asynchronous
+
+Definition fixed first: with prescaler D (`mode` field 12), a hart must match
+the model exactly with every tick lasting D+1 clocks. `rtl/div_replay.sh`
+replays all 98 recorded harts that way, holding each tick's inputs for D+1
+clocks, and `rtl/tb_div_mode.v` checks that a program can set the prescaler.
+
+The first run failed 87 of 98 harts at D = 1 and D = 3. The prescaler only
+slowed `now`. Instructions, input sampling, clocked bits, hold traps and the
+`sync` lag all still ran every clock, so a prescaled hart ran ahead of its own
+timer. Any program using `div`, such as 1-Wire with its 480 us reset, would
+have mixed time units in silicon. Fixed by making the prescaler a clock enable
+for the whole hart: between ticks it only counts. At D = 0 every clock is a
+tick, so nothing else changes. After the fix: 98 of 98 at D = 0, 1, 2, 3 and 7.
+Planted prescaler bugs: 4 of 4 caught (prescaler ignored, counter steps by 2,
+field 12 ignored, inputs sampled every clock), each by at least one test.
+The assembler still cannot name field 12; programs set it with a raw word.
+
+Local gate-level simulation of that change then failed: bit 0 of hart 0's
+`now` never left X during reset, the same trap as the FIFO pointer. Its next
+value was built as `~((~q & a) | (q & b))`, which is 0 during reset in silicon
+but stays X in simulation while q is X. Rather than fix registers one at a
+time, power-on reset now goes to the flops' reset pins across the chip: hart
+state, the trap configuration (now six registers instead of an array), unit
+registers, the program write pulse and the host port. The synchronous `rst`
+that holds a hart still loads its real starting values afterwards. No
+synchronous resets remain; the only flops without a reset are the FIFO
+memories, which are never read before they are written. Local gate-level run:
+2 of 2, and no flop left X after reset in the bits the scan could match.
+
+Checks: replay 98, prescaler replay 98 at D = 1, 3, 7, directed prescaler test,
+40 of 40 chip scenarios with 471 bytes, cocotb 2 of 2, 18 of 18 hart bugs (one
+pattern retargeted for the renamed trap registers), 20 of 20 chip bugs, proof
+at `dwell` 4 passes and fails at 3, 16 proof bugs plus the expected survivor,
+all 8 coverage points, default synthesis 6 s. The `stuffcover` task now
+finishes inside its time limit, so it reports the six points that only the
+free-program task reaches as unreached; it reaches both of its own at step 15.
