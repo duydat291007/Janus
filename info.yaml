@@ -7,7 +7,7 @@ project:
   language:     "Verilog"
   clock_hz:     50000000
 
-  tiles: "6x4"
+  tiles: "8x4"
 
   top_module:  "tt_um_duydat291007_janus"
 

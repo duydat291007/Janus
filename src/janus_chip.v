@@ -1,5 +1,5 @@
 // verilator lint_off LATCH
-// Janus chip top: two harts, 48 words of shared program memory, FIFOs and an
+// Janus chip top: two harts, 64 words of shared program memory, FIFOs and an
 // SPI host port.
 //
 // ui_in[0] SCK, ui_in[1] MOSI, ui_in[2] CSn (active low). SPI mode 0, MSB first.
@@ -69,7 +69,7 @@ module janus_unit (
     input  [7:0]  line,          // pin levels, in chip pin order
     output [7:0]  low,           // pins this hart pulls low
     output [7:0]  high,          // pins this hart drives high, push-pull only
-    output [47:0] sel,           // pc as one-hot, one bit per program word
+    output [63:0] sel,           // pc as one-hot, one bit per program word
     input  [31:0] ins,
     input         reg_we,
     input  [3:0]  reg_addr,
@@ -104,7 +104,7 @@ module janus_unit (
     wire       tx_empty, tx_full, tx_pop, tx_clear, rx_full, arb_lost;
     wire       rx_push, seen_push, seen_push2;
     wire [63:0] pc_sel;
-    assign sel = pc_sel[47:0];   // there are 48 words; a pc past them fetches 0
+    assign sel = pc_sel;
 
     reg  [7:0] pending;
     reg        pending_valid;
@@ -202,7 +202,7 @@ module tt_um_duydat291007_janus (
     wire       empty0, empty1;
     // Reading an empty FIFO returns 0, not whatever is in its memory.
     wire [7:0] rd_head = h ? (empty1 ? 8'd0 : head1) : (empty0 ? 8'd0 : head0);
-    wire [47:0] sel0, sel1;
+    wire [63:0] sel0, sel1;
 
     // Program memory: one latch per bit, at about half the area of a flop with
     // its write mux. Load programs only while the harts that run them are
@@ -211,7 +211,7 @@ module tt_um_duydat291007_janus (
     wire [31:0]  wdata = {b0, b1, b2, shift};
     wire [5:0]   waddr = a0[5:0];
     reg          we_d, wpulse;
-    wire [1535:0] words;
+    wire [2047:0] words;
     // Each fetch is an AND-OR over the words, steered by the hart's one-hot
     // pc. A binary pc would have each of its bits steer hundreds of muxes,
     // which was the slowest path on the chip.
@@ -220,7 +220,7 @@ module tt_um_duydat291007_janus (
     always @* begin
         ins0 = 32'd0;
         ins1 = 32'd0;
-        for (f = 0; f < 48; f = f + 1) begin
+        for (f = 0; f < 64; f = f + 1) begin
             ins0 = ins0 | (words[32 * f +: 32] & {32{sel0[f]}});
             ins1 = ins1 | (words[32 * f +: 32] & {32{sel1[f]}});
         end
@@ -238,7 +238,7 @@ module tt_um_duydat291007_janus (
 
     genvar w;
     generate
-        for (w = 0; w < 48; w = w + 1) begin : word
+        for (w = 0; w < 64; w = w + 1) begin : word
             reg [31:0] bits;
             wire en = wpulse && waddr == w;
             always @* if (en) bits = wdata;
