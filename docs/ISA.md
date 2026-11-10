@@ -99,7 +99,9 @@ If the owner is mine, apply it. Takes one tick.
 - **Listener:** samples each bit at mid-bit into the receive shift register.
   A constant that does not match counts a violation, unless `free`.
 - **Coder:** with stuffing enabled in `mode`, bits run through a run-length
-  stuffer and the CRC. A missing stuff bit counts a violation and jumps to
+  stuffer and the CRC. An owner feeds them the bit it meant to send, and a
+  listener the bit it sampled, so a bit corrupted on the wire fails the
+  listener CRC check. A missing stuff bit counts a violation and jumps to
   `on_error`. With the ones-only flag, only a run of 1s is counted and the
   stuffed bit is a 0, as USB needs.
 - **Pair:** with `pair` set in `mode`, the owner drives a second pin as the
@@ -169,7 +171,7 @@ logs it instead.
 | 1 | `last0` | the last bit seen was 0 |
 | 2 | `last1` | the last bit seen was 1 |
 | 3 | `count0` | the counter is 0 |
-| 4 | `loop` | after decrementing, the counter is not 0 |
+| 4 | `loop` | after decrementing, the counter is not 0; a counter at 0 stays 0 |
 | 5 | `crc_bad` | the CRC differs from `resid` (0 unless set); also counts a violation |
 
 ### choice: let the sender decide
@@ -263,6 +265,21 @@ An edge trap catches events like an I2C START (SDA falls while SCL is high). A
 hold trap catches a level held for a count of ticks, like a 1-Wire reset pulse.
 If several traps fire in one tick, only the first edge trap counts, and a hold
 trap overrides it; hold trap 3 overrides hold trap 2.
+
+## Adversary
+
+Any hart can be made an adversary. The host writes register 11: bit 15
+enables it and bits 11:0 give a number N. The hart then runs its program
+as usual, but drives the wrong level for the Nth timed bit it owns, counting
+from 0 from the moment it starts, once. With a pair, both pins flip. The
+hart does not notice its own fault: its CRC and stuffing follow the bit it
+meant to send, and the faulty bit cannot make it lose arbitration.
+
+This turns one chip into a fault injector for the other: one hart sends a
+frame with a chosen bit wrong, and the other, as a peripheral or a witness,
+must flag it. `test_adversary.py` sweeps the fault over every bit of a UART
+byte, a CAN frame and a USB transaction. Clocked bits (SPI, I2C) have no
+fault injection.
 
 ## Example: UART
 

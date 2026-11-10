@@ -16,7 +16,8 @@ import test_usb as tu
 from janus import Bus, Hart, WITNESS
 
 TESTS = []
-RECOVERY = True   # the RTL replay records the faulty run only
+RECOVERY = True   # the RTL replay records the faulty run only ...
+STEP = 1          # ... and every few positions, to stay short
 BIT = tu.BIT
 
 
@@ -72,7 +73,7 @@ def usb_host_fault_anywhere():
     first_covered = 36 + 16                  # token packet, then the data SYNC and PID
     last_covered = total - 5                 # before SE0, SE0, J and the turnaround bit
     silent = []
-    for n in range(total):
+    for n in range(0, total, STEP):
         bus, host, device, witness = usb(n)
         assert host.fault is None, n         # the fault happened
         acked = tu.ACK_BYTE in host.rx_q
@@ -93,7 +94,7 @@ def usb_device_fault_in_the_handshake():
     _, _, clean, _ = usb(10 ** 9, "B")
     total = clean.owned
     unnoticed = []
-    for n in range(total):
+    for n in range(0, total, STEP):
         bus, host, device, witness = usb(n, "B")
         clean_ack = list(host.rx_q) == [tu.ACK_BYTE]
         if clean_ack and not witness.violations and not host.violations:
@@ -139,7 +140,7 @@ def can_sender_fault_anywhere():
     _, clean, receiver, witness = can(10 ** 9)
     assert tc.received(receiver) == [FRAME] and not witness.violations
     total = clean.owned
-    for n in range(total):
+    for n in range(0, total, STEP):
         bus, sender, receiver, witness = can(n)
         assert sender.fault is None, n
         assert witness.violations, f"bit {n} went unnoticed"

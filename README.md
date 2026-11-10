@@ -29,7 +29,8 @@ peripheral, or a witness that checks the traffic without driving anything.
 
 ## Status
 
-The design passes the full Tiny Tapeout flow, precheck and gate-level test.
+The design passed the full Tiny Tapeout flow, precheck and gate-level test
+before the adversary was added; that version has not been through the flow yet.
 Everything below was checked in simulation or by formal proof.
 
 - UART, SPI, I2C, 1-Wire and CAN base frames run end to end through the host port,
@@ -48,6 +49,10 @@ Everything below was checked in simulation or by formal proof.
   transaction at the packet layer and needs a 24 MHz clock. It has no address
   filter, no IN transfers and no enumeration, and it has run in simulation only.
   The record is in `KILL_TEST.md`.
+- Any hart can be an adversary that sends one chosen bit wrong. Sweeping that
+  over every bit of a CAN frame and a USB transaction found three bugs, now
+  fixed, and shows what the other harts catch: every CAN fault, and every USB
+  fault in the data and CRC16, but not faults in a USB token or PID.
 
 ## Running the checks
 
@@ -58,6 +63,7 @@ python test_janus.py
 python test_onewire.py
 python test_can.py
 python test_usb.py
+python test_adversary.py
 python check_sync.py
 ```
 

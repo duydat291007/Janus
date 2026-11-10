@@ -294,7 +294,8 @@ class Hart:
 
     def _branch(self, cond, label):
         if cond == "loop":
-            self.count -= 1
+            if self.count:  # a counter at 0 stays there, as in the hardware
+                self.count -= 1
             taken = self.count > 0
         elif cond == "crc_bad":
             taken = self.crc != self.cfg["resid"]

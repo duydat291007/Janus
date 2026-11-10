@@ -14,6 +14,7 @@ import janus  # noqa: E402
 import test_can  # noqa: E402
 import test_janus  # noqa: E402
 import test_onewire  # noqa: E402
+import test_adversary  # noqa: E402
 import test_usb  # noqa: E402
 from janus import RESTART, STOP, Hart  # noqa: E402
 
@@ -21,8 +22,9 @@ from janus import RESTART, STOP, Hart  # noqa: E402
 class RecHart(Hart):
     live = []
 
-    def __init__(self, prog, role, bus, addr=None, tx=()):
-        super().__init__(prog, role, bus, addr, tx)
+    def __init__(self, prog, role, bus, addr=None, tx=(), fault=None):
+        super().__init__(prog, role, bus, addr, tx, fault)
+        self.rec_fault = 0 if fault is None or fault > 0xFFF else 0x8000 | fault
         self.start_tx, self.rows, self.tx_hold = list(tx), [], 0
         self.rx_hash, self.seen_hash, self.rx_n, self.seen_n = 0, 0, 0, 0
         self.pin_list = list(prog.pins)
@@ -71,7 +73,8 @@ def write_hart(hart, base):
     meta = [encode.ROLE[hart.rec_role], hart.rec_addr or 0, used << 8 | od, ticks & 0xFFFF,
             len(hart.start_tx), *encode.config_words(prog), hart.seen_hash,
             hart.tx_hold & 0xFFFF, hart.tx_hold >> 16, ticks >> 16,
-            hart.cfg["div"]]   # the prescaler the program leaves set
+            hart.cfg["div"],   # the prescaler the program leaves set
+            hart.rec_fault]    # the adversary's fault register
     with open(base + ".meta", "w") as f:
         f.writelines(f"{w:04x}\n" for w in meta)
 
@@ -79,13 +82,16 @@ def write_hart(hart, base):
 def main():
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
-    for module in (test_janus, test_onewire, test_can, test_usb):
+    for module in (test_janus, test_onewire, test_can, test_usb, test_adversary):
         module.Hart = RecHart
     test_usb.TRIALS, test_usb.RANDOM_PAYLOADS = 30, 5   # keeps the replay short
+    test_adversary.RECOVERY = False   # the testbench queues data once
+    test_adversary.STEP = 6
     cases = [(n, f, a) for n, f, a in test_janus.TESTS]
     cases += [(f.__name__, f, ()) for f in test_onewire.TESTS]
     cases += [(f.__name__, f, ()) for f in test_can.TESTS]
     cases += [(f.__name__, f, ()) for f in test_usb.TESTS]
+    cases += [(f.__name__, f, ()) for f in test_adversary.TESTS]
     written = 0
     for name, fn, args in cases:
         RecHart.live = []

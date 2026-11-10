@@ -92,6 +92,7 @@ module janus_hart (
 
     // Configuration
     reg [15:0] cfg0, cfg1, cfg2, cfg3, cfg4, cfg5;   // traps 0-3, hold counts 4-5
+    reg [15:0] cfg6;                   // adversary: bit 15 enable, 11:0 which owned bit
     reg        c_msb, c_rs_en, c_cpol, c_cpha, c_l2_en;
     reg [1:0]  c_rs_pin, c_clk, c_l2_pin;
     reg [3:0]  c_stuff;
@@ -104,6 +105,8 @@ module janus_hart (
     reg [1:0]  c_pair;
     reg [15:0] c_resid;
     reg [5:0]  c_brk;
+    reg [11:0] f_cnt;                  // timed bits this hart has owned
+    reg        f_armed, faulty;        // the fault is still to come; this bit is it
 
     // Hart state
     // Keep synthesis from re-encoding this as a state machine. The blocking
@@ -123,7 +126,7 @@ module janus_hart (
     reg [10:0] cnt;
 
     // Temporaries
-    reg        fired, taken, is_data, src_const, fb, level, lvl, raw, broke;
+    reg        fired, taken, is_data, src_const, fb, level, lvl, raw, broke, coded;
     reg [5:0]  fire_to;
     reg [11:0] diff;
     reg [15:0] tw;
@@ -158,7 +161,8 @@ module janus_hart (
     assign dbg_clean = !c_rs_en && !lf_valid && c_lose == WITNESS
         && !c_l2_en && c_div == 0 && div_cnt == 0
         && !cfg0[15] && !cfg1[15] && !cfg2[15] && !cfg3[15]
-        && !c_ones && !c_init1 && !c_pair_en && !c_nrzi && !c_brk_en && c_resid == 0;
+        && !c_ones && !c_init1 && !c_pair_en && !c_nrzi && !c_brk_en && c_resid == 0
+        && !cfg6[15] && !f_armed && !faulty;
 `endif
 
     function automatic is_mine(input [1:0] party, input [1:0] r);
@@ -403,7 +407,7 @@ module janus_hart (
         c_width = 0; c_err = 0; c_lose = WITNESS; c_clk = 0; c_clk_own = 0;
         c_cpol = 0; c_cpha = 0; c_l2_en = 0; c_l2_pin = 0; c_l2_own = 0; c_div = 0;
         c_ones = 0; c_init1 = 0; c_pair_en = 0; c_pair = 0; c_nrzi = 0;
-        c_resid = 0; c_brk_en = 0; c_brk = 0;
+        c_resid = 0; c_brk_en = 0; c_brk = 0; f_cnt = 0; f_armed = 0; faulty = 0;
         oe <= 0; ov <= 0; pc <= 0; pc_sel <= 64'd1;
         tx_pop <= 0; tx_clear <= 0; rx_push <= 0; seen_push <= 0; seen_push2 <= 0;
         push_data <= 0; push_data2 <= 0; violations <= 0; arb_lost <= 0;
@@ -433,6 +437,7 @@ module janus_hart (
             c_l2_en = 0; c_l2_pin = 0; c_l2_own = 0; c_div = 0;
             c_ones = 0; c_init1 = 0; c_pair_en = 0; c_pair = 0; c_nrzi = 0;
             c_resid = 0; c_brk_en = 0; c_brk = 0;
+            f_cnt = 0; f_armed = cfg6[15]; faulty = 0;
         end else if (div_cnt != c_div) begin
             // Between prescaled ticks the hart holds still, so with prescaler
             // D it behaves as the model does with each tick D+1 clocks long.
@@ -682,6 +687,13 @@ module janus_hart (
                               if (cur_mine) begin
                                   // NRZI: a 1 keeps the line level, a 0 changes it.
                                   lvl = (c_nrzi && !i_brk) ? pin[i_pin] ^ !val : val;
+                                  // An adversary drives one chosen bit wrong, once.
+                                  faulty = f_armed && f_cnt == cfg6[11:0];
+                                  if (faulty) begin
+                                      lvl = !lvl;
+                                      f_armed = 1'b0;
+                                  end
+                                  if (f_armed) f_cnt = f_cnt + 1'b1;
                                   put(i_pin, lvl, i_brk);
                               end
                               s = S_MID;
@@ -718,7 +730,7 @@ module janus_hart (
                                       end else if (src_const && seen != src_eff[0] && (inserted || !i_strm))
                                           violations_r = violations_r + 1'b1;
                                   end else if (is_data) begin
-                                      if (c_lose != LOSE_NONE && val && !seen)
+                                      if (c_lose != LOSE_NONE && val && !seen && !faulty)
                                           lose(i_pin, 1'b0, 3'd0);
                                   end else s = S_SETTLE;
                               end
@@ -727,20 +739,23 @@ module janus_hart (
 
                       if (s == S_SETTLE) begin
                           // Under NRZI the level driven is not the bit value.
-                          if (!(od_mask[i_pin] && pin[i_pin] != (c_nrzi ? ov_r[i_pin] : val)))
+                          if (!(od_mask[i_pin] && pin[i_pin] != ((c_nrzi || faulty) ? ov_r[i_pin] : val)))
                               s = S_POST;
                       end
 
                       if (s == S_POST) begin
+                          // The coder follows the bit an owner meant to send, not
+                          // its readback, so a corrupted bit cannot enter its CRC.
+                          coded = (cur_mine && is_mine(i_owner, role)) ? val : seen;
                           if (inserted) begin
-                              if (seen == saved) begin
+                              if (coded == saved) begin
                                   violations_r = violations_r + 1'b1;
                                   partial = 0;
                                   inserted = 1'b0;
                                   pc_r = c_err;
                                   s = S_FETCH;
                               end else begin
-                                  run_val = seen;
+                                  run_val = coded;
                                   run_valid = 1'b1;
                                   run_len = 1;
                                   bit_done;
@@ -748,16 +763,16 @@ module janus_hart (
                           end else if ({c_ones, c_stuff} == 0 || i_brk) begin
                               bit_done;
                           end else begin
-                              fb = seen ^ crc[c_width - 1'b1];
+                              fb = coded ^ crc[c_width - 1'b1];
                               crc = {crc[14:0], 1'b0} & ~(16'hFFFF << c_width);
                               if (fb) crc = crc ^ c_poly;
-                              run_len = (run_valid && seen == run_val) ? run_len + 1'b1 : 4'd1;
-                              run_val = seen;
+                              run_len = (run_valid && coded == run_val) ? run_len + 1'b1 : 4'd1;
+                              run_val = coded;
                               run_valid = 1'b1;
-                              if (run_len == c_stuff && (seen || !c_ones)) begin
+                              if (run_len == c_stuff && (coded || !c_ones)) begin
                                   inserted = 1'b1;
-                                  stuff_bit = !seen;
-                                  saved = seen;
+                                  stuff_bit = !coded;
+                                  saved = coded;
                                   start_bit;
                               end else bit_done;
                           end
@@ -787,7 +802,7 @@ module janus_hart (
     // frame takes many ticks anyway, so the extra tick cannot be seen.
     always @(posedge clk or posedge por) begin
         if (por) begin
-            cfg0 <= 0; cfg1 <= 0; cfg2 <= 0; cfg3 <= 0; cfg4 <= 0; cfg5 <= 0;
+            cfg0 <= 0; cfg1 <= 0; cfg2 <= 0; cfg3 <= 0; cfg4 <= 0; cfg5 <= 0; cfg6 <= 0;
         end else if (cfg_we) begin
             case (cfg_addr)
                 3'd0: cfg0 <= cfg_data;
@@ -796,6 +811,7 @@ module janus_hart (
                 3'd3: cfg3 <= cfg_data;
                 3'd4: cfg4 <= cfg_data;
                 3'd5: cfg5 <= cfg_data;
+                3'd6: cfg6 <= cfg_data;
                 default: ;
             endcase
         end

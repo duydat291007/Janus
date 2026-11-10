@@ -757,3 +757,59 @@ queues are exactly full in that transaction, so a longer packet or a second
 transaction queued early would still overflow. The hart did not change, so
 its replay, proof and planted-bug results stand. This version then passed
 the Tiny Tapeout flow: layout, precheck and the gate-level test.
+
+## Adversary: a hart that sends one bit wrong
+
+Not a hold-out test: this was built after the USB result, to attack the
+design with itself. Any hart can be made an adversary through host register
+11. It runs its program unchanged but drives the wrong level for one chosen
+timed bit it owns, once. `test_adversary.py` sweeps that fault over every bit
+a sender owns and states what the other harts must do. Clocked bits (SPI,
+I2C) have no fault injection.
+
+It found three bugs, all fixed:
+
+1. A sender fed its CRC and its stuffer with the bit it read back, not the
+   bit it meant to send. A corrupted data bit in a CAN frame therefore went
+   into the sender CRC too, and every receiver accepted the wrong frame: 47 of
+   82 fault positions delivered wrong data with no violation anywhere. This
+   was in the hart, not in the CAN program, so noise on a real bus would have
+   done the same. An owner now codes the bit it meant to send.
+2. A USB host whose queue ran dry inside a packet sent 0xFF bytes for ever,
+   because only a STOP entry ended a packet. An empty queue now ends it too,
+   and the host waits for queued data before every packet.
+3. The model let the loop counter go below 0 where the Verilog stops at 0.
+   The replay caught it as 2 mismatching harts of 577. The model was wrong.
+
+Results after the fixes:
+
+- CAN, sender adversary: all 82 positions are flagged by the witness, no
+  wrong frame is accepted, the bus goes idle and the next frame is clean.
+- USB, host adversary, 139 positions: every fault in the data and CRC16 is
+  flagged and never answered with ACK. An ACK always means the data bytes
+  were right. The bus recovers after every position. 31 positions go
+  unnoticed, all in the token or a PID byte, because the chip checks neither
+  CRC5 nor the PID. That is a real gap, not a rounding error.
+- USB, device adversary, 19 positions in the handshake: none leaves the host
+  with a clean ACK byte and no violation.
+- UART: a wrong stop bit is flagged. A wrong data bit arrives as a wrong
+  byte and nothing can tell, since UART has no redundancy.
+- 3 of 3 planted bugs are caught (`python test_adversary.py mutants`).
+
+Checks: the 70 earlier model tests are unchanged. The Verilog replays 457
+recorded harts tick for tick, the adversary runs among them at every sixth
+position. Chip scenarios are 62 of 62 with 815 byte checks, ten of them
+adversary runs through the host port.
+The prescaler replay passes at 3 and 7. Planted bugs: 38 of 38 in the hart,
+six of them in the new logic (one older bug retargeted to a changed line),
+20 of 20 in the chip, and 16 proof bugs plus the expected survivor. The proof
+passes at `dwell` 4 and fails at 3 as before; its subset excludes the
+adversary, and it now covers the coder following the owner's intended bit.
+Cost: 54 flops and 1.5% area (308,867 to 313,360 um2 synthesized); the
+estimated critical path goes from 6.5 to 6.8 ns. This version has not been
+through the Tiny Tapeout flow yet.
+
+Limits: one fault per run, in timed bits only. The fault is a wrong level
+for a whole bit; it cannot shift an edge, shorten a bit or add a glitch. The
+recovery checks queue the next frame after the bus is idle; bytes left in a
+queue by a cut-off frame are sent as bogus frames first, and are flagged.

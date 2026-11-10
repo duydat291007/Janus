@@ -128,10 +128,10 @@ def load_then_choice(bit):
     return q
 
 
-def model(prog, role0, role1, tx0=(), tx1=(), addr0=None, addr1=None, ticks=0):
+def model(prog, role0, role1, tx0=(), tx1=(), addr0=None, addr1=None, ticks=0, fault0=None):
     """Run the scenario on the model. Returns the two finished harts."""
     bus = Bus(prog.pins)
-    h0 = Hart(prog, role0, bus, addr=addr0, tx=tx0)
+    h0 = Hart(prog, role0, bus, addr=addr0, tx=tx0, fault=fault0)
     h1 = Hart(prog, role1, bus, addr=addr1, tx=tx1)
     bus.add(h0, h1)
     bus.run(ticks)
@@ -139,8 +139,9 @@ def model(prog, role0, role1, tx0=(), tx1=(), addr0=None, addr1=None, ticks=0):
 
 
 def scenario(out, name, prog, role0, role1, tx0=(), tx1=(), addr0=None, addr1=None,
-             ticks=0, base=0, rot=0, loopback=1, undriven_pin=False, clocks_per_tick=1):
-    h0, h1 = model(prog, role0, role1, tx0, tx1, addr0, addr1, ticks)
+             ticks=0, base=0, rot=0, loopback=1, undriven_pin=False, clocks_per_tick=1,
+             fault0=None):
+    h0, h1 = model(prog, role0, role1, tx0, tx1, addr0, addr1, ticks, fault0)
     assert not h0.tx_q and not h1.tx_q or role0 == "S", name
     s = Script()
     if loopback:
@@ -156,6 +157,8 @@ def scenario(out, name, prog, role0, role1, tx0=(), tx1=(), addr0=None, addr1=No
     s.load(prog, base)
     s.setup(0, prog, role0, base, addr0, rot)
     s.setup(1, prog, role1, base, addr1, rot)
+    if fault0 is not None:  # hart 0 is an adversary: it sends this bit wrong
+        s.reg(0, 11, 0x8000 | fault0)
     s.push(0, tx0)
     s.push(1, tx1)
     s.run(1, 1, loopback)
@@ -263,6 +266,17 @@ def main():
             undriven_pin=True)
         add("usb_witness_8_bytes", p.usb(16), "A", WITNESS, tx0=usb_full, ticks=16 * 250,
             undriven_pin=True)
+        # Adversaries: hart 0 flips one bit. The other hart must flag it.
+        add("adversary_usb_data_bit", p.usb(16), "A", "B", tx0=usb_full, ticks=16 * 250,
+            undriven_pin=True, fault0=70)
+        add("adversary_usb_witness", p.usb(16), "A", WITNESS, tx0=usb_full, ticks=16 * 250,
+            undriven_pin=True, fault0=101)
+        add("adversary_can_data_bit", p.can(50), "S", "R", tx0=can_tx(0x7F0, [1, 2, 3, 4, 5]),
+            ticks=50 * 130, fault0=30)
+        add("adversary_can_witness", p.can(50), "S", WITNESS,
+            tx0=can_tx(0x7F0, [1, 2, 3, 4, 5]), ticks=50 * 130, fault0=45)
+        add("adversary_uart_stop_bit", p.uart(50), "A", WITNESS, tx0=[0x5A], ticks=50 * 20,
+            fault0=9)
     streaming(out)
     counts["uart_streaming"] = 20
     stuck_pins(out)

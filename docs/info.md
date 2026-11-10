@@ -31,7 +31,7 @@ Each frame is selected by its first byte, and `h` is the hart number:
 | Frame | Meaning |
 |---|---|
 | `10 addr d3 d2 d1 d0` | Write one program word, address 0 to 63. The harts using it must be stopped. |
-| `2h reg hi lo` | Write a hart register: 0-5 traps, 6 role, 7 address, 8 open-drain mask, 9 pin rotation, 10 start address |
+| `2h reg hi lo` | Write a hart register: 0-5 traps, 6 role, 7 address, 8 open-drain mask, 9 pin rotation, 10 start address, 11 adversary fault |
 | `30 ctrl` | Bit 0 runs hart 0, bit 1 runs hart 1, bit 2 selects loopback |
 | `4h ctl data` | Push a transmit entry: ctl 0 data, 1 STOP, 2 RESTART |
 | `5h xx xx ...` | Read received bytes; each dummy byte returns one |

@@ -9,7 +9,7 @@ module tb_replay;
     wire [5:0]  pc;
     wire        tx_pop, tx_clear, rx_push, seen_push, seen_push2, arb_lost;
     reg  [31:0] prog [0:63];
-    reg  [15:0] meta [0:15];
+    reg  [15:0] meta [0:16];
     reg  [9:0]  txm  [0:255];
     reg  [47:0] vec  [0:MAX_TICKS-1];
     reg  [47:0] v;
@@ -57,6 +57,8 @@ module tb_replay;
             @(negedge clk);
             cfg_we = 1; cfg_addr = i; cfg_data = meta[5 + i];
         end
+        @(negedge clk);
+        cfg_we = 1; cfg_addr = 6; cfg_data = meta[16];   // the adversary's fault
         @(negedge clk); cfg_we = 0;
         @(negedge clk); rst = 0;
         if (div) dut.c_div = div;

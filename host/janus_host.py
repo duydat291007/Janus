@@ -17,6 +17,7 @@ REG_ADDR = 7
 REG_OD_MASK = 8        # bit i set: hart pin i is open drain
 REG_ROT = 9            # chip pin rot+i is hart pin i
 REG_START = 10         # program address the hart starts at
+REG_FAULT = 11         # adversary: bit 15 enable, bits 11:0 which owned bit to send wrong
 
 # Roles. A program names its parties; A, C and S are role 0, B, T and R role 1.
 ROLE = {"A": 0, "C": 0, "S": 0, "B": 1, "T": 1, "R": 1, "WITNESS": 3}
@@ -89,8 +90,9 @@ class Janus:
     def write_register(self, hart, reg, value):
         self.transfer(frame_register(hart, reg, value))
 
-    def configure(self, hart, image, role, addr=0, rot=0):
-        """Set up a hart to run a program image as one role."""
+    def configure(self, hart, image, role, addr=0, rot=0, fault=None):
+        """Set up a hart to run a program image as one role. With fault=n the
+        hart is an adversary: it sends the nth timed bit it owns wrong, once."""
         for i, word in enumerate(image["config"]):
             self.write_register(hart, REG_TRAPS + i, word)
         self.write_register(hart, REG_ROLE, ROLE[role] if isinstance(role, str) else role)
@@ -98,6 +100,7 @@ class Janus:
         self.write_register(hart, REG_OD_MASK, image["od_mask"])
         self.write_register(hart, REG_ROT, rot)
         self.write_register(hart, REG_START, image.get("base", 0))
+        self.write_register(hart, REG_FAULT, 0 if fault is None else 0x8000 | fault)
 
     def run(self, hart0, hart1, loopback=False):
         """Start or stop the harts. Loopback is chosen in an earlier frame than

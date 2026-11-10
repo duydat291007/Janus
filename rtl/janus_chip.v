@@ -10,7 +10,8 @@
 // Host frames, chosen by the first byte (h is the hart number):
 //   10 addr d3 d2 d1 d0   write one program word
 //   2h reg hi lo          write a hart register: 0-5 traps, 6 role, 7 address,
-//                         8 open-drain mask, 9 pin rotation, 10 start address
+//                         8 open-drain mask, 9 pin rotation, 10 start address,
+//                         11 adversary fault
 //   30 ctrl               bit 0 run hart 0, bit 1 run hart 1, bit 2 loopback
 //                         Set loopback in an earlier frame than the run bits, so
 //                         harts leave reset already watching the right line.
@@ -119,7 +120,9 @@ module janus_unit (
         .tx_pop(tx_pop), .tx_clear(tx_clear), .rx_push(rx_push), .seen_push(seen_push),
         .seen_push2(seen_push2), .push_data(push_data), .push_data2(push_data2),
         .violations(violations), .arb_lost(arb_lost),
-        .cfg_we(reg_we && reg_addr < 4'd6), .cfg_addr(reg_addr[2:0]), .cfg_data(reg_data));
+        .cfg_we(reg_we && (reg_addr < 4'd6 || reg_addr == 4'd11)),
+        // Register 11 is the hart's seventh: the adversary's fault.
+        .cfg_addr(reg_addr == 4'd11 ? 3'd6 : reg_addr[2:0]), .cfg_data(reg_data));
 
     janus_fifo #(.W(10), .LOG(4)) tx_fifo (
         .clk(clk), .rst(por), .clear(tx_clear), .push(tx_push), .din(tx_din),
