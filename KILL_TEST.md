@@ -648,3 +648,93 @@ recovers a token and an 8-byte data packet sent by the reference sender.
 What stage 2 would need, all generic: a complementary pin pair, NRZI line
 coding, stuffing of ones only (HDLC and USB both use it), and CRCs that start
 from all ones and are sent inverted, which most serial CRCs do.
+
+### Hold-out result, stage 2
+
+The stage 1 failure stands. Stage 2 extends the ISA and PASSES every
+pre-registered case, with all earlier tests unchanged. Run `python test_usb.py`;
+`python test_usb.py frozen` still shows the stage 1 failure.
+
+What was added, none of it named after USB:
+
+| Addition | Where | What it does |
+|---|---|---|
+| `pair` | mode field 13 | Timed bits drive a second pin as the complement |
+| `nrzi` | mode field 14 | A 0 is a change of level, a 1 is none |
+| ones-only stuffing | bit 4 of `stuff` | Count only 1s and stuff a 0 |
+| CRC start and restart | bit 5 of `width` | The CRC restarts at all ones; a `width` write restarts it |
+| `resid` | mode field 15 | The CRC value `crc_bad` accepts |
+| break | bit 13 of `bits`, mode field 16 `on_break` | Drive both pins low; a listener that samples a break jumps |
+
+One planned feature was not needed and was left out: sending the CRC
+inverted. The host queues the CRC bytes and the chip checks the residual.
+
+The program (`protocols.usb`) is 46 instructions with 2 role-dependent ones:
+the `choice` that ends a packet and the `on_break` jump, which only listeners
+take. It is the same program for host, device and witness, and the witness has
+no code of its own.
+
+Results, 14 cases:
+
+- Janus host to a reference device, a reference host to a Janus device, and
+  Janus to Janus over 300 random payloads of 0 to 8 bytes: the independent
+  decoder reads the token, the data packet and the ACK, with good PIDs, CRC5,
+  CRC16 and EOPs; no violations and no bus contention.
+- The device answers 2.12 bit times after the EOP. A host with no device
+  counts a violation 17.19 bit times after the EOP, then runs its next
+  transaction cleanly.
+- A sender 1.5% fast or slow: 45 payloads at each rate, all received and
+  answered, including all-ones and all-zeros data.
+- The witness flags seven ones in a row, four different CRC16 errors, a
+  missing EOP, an EOP inside a byte, and an EOP of one bit time. For the
+  first three the device stays silent and the next good transaction is
+  answered.
+- The wire is only ever J, K or SE0, idles in J, and holds SE0 for exactly
+  two bit times at each of the three EOPs. No bit edge is late.
+- 12 of 12 bugs planted in the model or program are caught
+  (`python test_usb.py mutants`).
+
+The Verilog: 286 recorded harts replay tick for tick, 185 of them USB, and
+again with the prescaler at 3 and 7. Chip
+scenarios are 48 of 48 with 559 byte checks, including a USB transaction and
+a USB timeout through the host port, in loopback and on the pins.
+Planted bugs: 32 of 32 in the hart (14 of them in the new logic), 20 of 20 in
+the chip, and 16 proof bugs plus the expected survivor. One new hart bug
+survived the first run, a listener not checking a break bit; the short-EOP
+case was added for it and now catches it. Three proof bugs were retargeted
+to renamed lines.
+The proof passes at `dwell` 4 and fails at 3 as before, for its subset, which
+now explicitly excludes the new modes. It failed once on the way: a register added for NRZI was not covered
+by the invariant, so the register was removed. Cost: 60 flops and 3.2% area
+(274,648 to 283,565 um2 synthesized); the estimated critical path goes from
+6.3 to 6.5 ns. This version has not been through the Tiny Tapeout flow yet.
+
+Limits, stated plainly:
+
+- The chip's queues hold 8 entries. A token and a full 8-byte data packet are
+  16 entries, and one USB byte lasts 5.3 us; no way for the host port to
+  refill or drain the queues that fast has been shown. The 8-byte cases pass on the model and in the hart replay, where the
+  queue is not limited. Through the real queues only a transaction with an
+  empty data packet fits, and that is what the chip scenarios run.
+- The host supplies the CRC5 and CRC16 bytes. The chip checks CRC16 and does
+  not check CRC5.
+- The device does not filter by address or endpoint: it answers any good data
+  packet. `match` cannot mask the endpoint bit that shares the address byte.
+- Only OUT with ACK. No IN, no SETUP sequence, no data toggle, no NAK or
+  STALL, no enumeration. It cannot be plugged into a PC as a working device.
+- A timeout is reported as a violation count, not as a status of its own.
+- After an EOP the sender drives J for two bit times; the specification asks
+  for one.
+- It needs a 24 MHz clock. At the 25 MHz in `info.yaml` the bit rate is 4%
+  high, outside the tolerance.
+- Simulation only. Pins are sampled single-ended on D-, and the pull
+  resistors and voltage levels are outside the chip.
+- The reference device and decoder were written for this test from the
+  specification, by the same author as the chip. They are independent code,
+  not an independent implementation. The three assumptions listed above are
+  still unchecked against the specification text.
+- The reference host idles for four bit times after reset before its first
+  packet; a Janus device needs about a dozen ticks to run its set-up.
+- `check_sync.py` does not cover `sync` bits under NRZI.
+- The reference decoder was changed after stage 1: it hung when a trace ended
+  inside a packet. No decoding rule changed.

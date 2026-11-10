@@ -81,6 +81,7 @@ def limits_frozen():
 ADDR, ENDP = 5, 1
 DATA = [0x00, 0x01, 0x7F, 0xFF, 0xFE, 0x80, 0xA5, 0x3C]  # needs stuffed bits
 ACK_BYTE = 0xD2
+TRIALS, RANDOM_PAYLOADS = 300, 40   # the RTL replay records fewer
 
 
 def pack(bits):
@@ -171,7 +172,7 @@ def reference_host_to_janus_device():
 @case
 def janus_both_ends():
     rng = random.Random(1)
-    for trial in range(300):
+    for trial in range(TRIALS):
         data = [rng.choice([0x00, 0xFF, 0xFE, 0x7F, rng.randrange(256)])
                 for _ in range(rng.randrange(9))]
         bus = ref.UsbBus()
@@ -201,28 +202,29 @@ def device_answers_inside_the_turnaround_window():
 @case
 def host_reports_a_timeout_when_no_device_answers():
     bus = ref.UsbBus()
-    host, witness = janus(bus, "A", WITNESS, tx=out_queue(DATA))
+    host, witness = janus(bus, "A", WITNESS, tx=out_queue(DATA) + out_queue(DATA))
     line_end = flagged = None
     for t in range(BIT * 400):
+        if host.violations:
+            break
         bus.tick()
         if t and (bus.trace[-2]["DP"], bus.trace[-2]["DM"]) == ref.SE0 \
                 and (bus.wire["DP"], bus.wire["DM"]) == ref.J:
             line_end = t
         if flagged is None and host.violations:
             flagged = t
-    packets = ref.usb_decode(bus.trace, BIT)
-    assert [p["pid"] for p in packets] == [ref.PID_OUT, ref.PID_DATA0], packets
     assert flagged is not None, "the host never flagged the missing handshake"
     waited = (flagged - line_end) / BIT
     print(f"     timeout flagged {waited:.2f} bit times after the EOP")
     assert 16 <= waited <= 18, waited
     assert (host.violations, witness.violations) == (1, 1)
     assert list(host.rx_q) == []
-    # The host is ready again: the next transaction, with a device, is clean.
-    host.tx_q.extend(out_queue(DATA))
+    # The host goes straight on to its next transaction. A device is there now.
     device = ref.UsbDevice(bus, BIT)
     bus.add(device)
     bus.run(BIT * 400)
+    pids = [p["pid"] for p in ref.usb_decode(bus.trace, BIT)]
+    assert pids == [ref.PID_OUT, ref.PID_DATA0, ref.PID_OUT, ref.PID_DATA0, ref.PID_ACK], pids
     assert device.acks == 1 and list(host.rx_q) == [ACK_BYTE]
     assert (host.violations, witness.violations, bus.contentions) == (1, 1, 0)
 
@@ -231,7 +233,7 @@ def host_reports_a_timeout_when_no_device_answers():
 def sender_clock_off_by_1_5_percent():
     rng = random.Random(2)
     payloads = [DATA, [0xFF] * 8, [0x00] * 8, [0xFE] * 8, [0x7F, 0xBF] * 4]
-    payloads += [[rng.randrange(256) for _ in range(8)] for _ in range(40)]
+    payloads += [[rng.randrange(256) for _ in range(8)] for _ in range(RANDOM_PAYLOADS)]
     for scale in (0.985, 1.0, 1.015):
         for data in payloads:
             bus = ref.UsbBus()
@@ -297,6 +299,19 @@ def witness_flags_an_eop_inside_a_byte():
     bus.run(BIT * 420)
     assert witness.violations >= 1 and device.violations >= 1
     assert not acks(bus)
+
+
+@case
+def witness_flags_a_short_eop():
+    """One bit time of SE0 where two are required."""
+    packets = host_packets(DATA)
+    assert packets[1][-3:] == [ref.SE0, ref.SE0, ref.J]
+    packets[1] = packets[1][:-2] + [ref.J, ref.J]
+    bus = ref.UsbBus()
+    device, witness = janus(bus, "B", WITNESS)
+    bus.add(ref.UsbSender(bus, packets, BIT, gap=2 * BIT))
+    bus.run(BIT * 420)
+    assert witness.violations >= 1 and device.violations >= 1
 
 
 @case

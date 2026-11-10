@@ -6,7 +6,8 @@
 //
 // Subset: timed bits including sync, on one pin, with run-length stuffing and
 // CRC, plus load, store, branch, counter, and mode writes to bit order,
-// stuffing, polynomial and CRC width. The assumption `sync_line_ok` is the sync rule that check_sync.py
+// stuffing, polynomial and CRC width. The pair, NRZI, ones-only stuffing, CRC
+// start value and residual, and break bits are outside the subset. The assumption `sync_line_ok` is the sync rule that check_sync.py
 // verifies statically: the line is at the opposite level when a sync bit starts.
 //
 // Claims:
@@ -33,14 +34,14 @@ module lockstep_ind (input clk);
             case (op)
                 4'd1: wf = i[27:25] == 0 && i[24:23] < 2
                         && (!i[16] || (i[22] && i[20:17] == 0))
-                        && !i[15] && i[10:0] >= D;
+                        && !i[15] && !i[13] && i[10:0] >= D;
                 4'd3: wf = i[27:26] < 2;
                 4'd4: wf = i[27:26] <= 2 && !i[25];
                 4'd5: wf = i[27:25] <= 5;
                 4'd8: wf = 1'b1;
                 4'd9: wf = i[27:23] == 0 || i[27:23] == 3
-                        || (i[27:23] == 2 && i[3:0] != 1)
-                        || (i[27:23] == 4 && i[4:0] >= 1 && i[4:0] <= 16);
+                        || (i[27:23] == 2 && i[3:0] != 1 && !i[4])
+                        || (i[27:23] == 4 && i[4:0] >= 1 && i[4:0] <= 16 && !i[5]);
                 default: wf = 1'b0;
             endcase
         end

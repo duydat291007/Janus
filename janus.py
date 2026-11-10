@@ -128,7 +128,7 @@ class Prog:
         nrzi: a 0 is a change of level and a 1 is none.
         resid: the CRC value that crc_bad accepts.
         on_break: where a listener jumps when it samples both pins of a pair
-        low in an ordinary bit.
+        low in an ordinary bit. ROLE-DEPENDENT: the owner does not jump.
         Hardware writes one field per instruction word, so this emits one
         instruction for each field."""
         for name, value in fields.items():
@@ -155,6 +155,7 @@ class Prog:
             count += ins.op == "claim" and ins.args["otherwise"] is not None
             count += ins.op == "bits" and ins.args["stream"]
             count += ins.op == "mode" and bool(ins.args.get("lose_to"))
+            count += ins.op == "mode" and ins.args.get("on_break") is not None
         return count
 
 

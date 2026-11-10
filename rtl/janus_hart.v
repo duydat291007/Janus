@@ -86,6 +86,7 @@ module janus_hart (
     wire        i_sync  = ins[16];
     wire        i_clkd  = ins[15];
     wire        i_strm  = ins[14];     // clocked: stream. timed: free, no check
+    wire        i_brk   = ins[13];     // timed: a break, the pin and its pair low
     wire [10:0] i_dwell = ins[10:0];
     wire [1:0]  i_party = ins[27:26];
 
@@ -99,6 +100,10 @@ module janus_hart (
     reg [5:0]  c_err;
     reg [1:0]  c_lose, c_clk_own, c_l2_own;
     reg [7:0]  c_div, div_cnt;
+    reg        c_ones, c_init1, c_pair_en, c_nrzi, c_brk_en;
+    reg [1:0]  c_pair;
+    reg [15:0] c_resid;
+    reg [5:0]  c_brk;
 
     // Hart state
     // Keep synthesis from re-encoding this as a state machine. The blocking
@@ -118,7 +123,7 @@ module janus_hart (
     reg [10:0] cnt;
 
     // Temporaries
-    reg        fired, taken, is_data, src_const, fb, level;
+    reg        fired, taken, is_data, src_const, fb, level, lvl, raw, broke;
     reg [5:0]  fire_to;
     reg [11:0] diff;
     reg [15:0] tw;
@@ -152,7 +157,8 @@ module janus_hart (
     // Everything the restricted program subset can never change from reset.
     assign dbg_clean = !c_rs_en && !lf_valid && c_lose == WITNESS
         && !c_l2_en && c_div == 0 && div_cnt == 0
-        && !cfg0[15] && !cfg1[15] && !cfg2[15] && !cfg3[15];
+        && !cfg0[15] && !cfg1[15] && !cfg2[15] && !cfg3[15]
+        && !c_ones && !c_init1 && !c_pair_en && !c_nrzi && !c_brk_en && c_resid == 0;
 `endif
 
     function automatic is_mine(input [1:0] party, input [1:0] r);
@@ -176,6 +182,25 @@ module janus_hart (
 
     task release_pin(input [1:0] p);
         oe_r[p] = 1'b0;
+    endtask
+
+    // A timed bit's pin and, with a pair, its complement. A break drives both low.
+    task put(input [1:0] p, input v, input brk);
+        begin
+            drive(p, v);
+            if (c_pair_en) drive(c_pair, brk ? v : !v);
+        end
+    endtask
+
+    task put_release(input [1:0] p);
+        begin
+            release_pin(p);
+            if (c_pair_en) release_pin(c_pair);
+        end
+    endtask
+
+    task restart_crc;
+        crc = c_init1 ? ~(16'hFFFF << c_width) : 16'd0;
     endtask
 
     task fire(input [5:0] target);
@@ -219,7 +244,7 @@ module janus_hart (
             role = c_lose;
             arb_lost_r = 1'b1;
             tx_clear_r = 1'b1;
-            release_pin(p);
+            put_release(p);
             if (also) release_pin(p2);
         end
     endtask
@@ -236,9 +261,10 @@ module janus_hart (
         begin
             partial = k != 0;
             cur_mine = is_mine(i_owner, role);
-            src_eff = inserted ? {1'b1, stuff_bit} : i_src;
+            src_eff = inserted ? {1'b1, stuff_bit} : i_brk ? 2'd2 : i_src;
             if (!inserted && i_sync && !cur_mine) begin
-                val = i_src[0];
+                // Under NRZI the awaited change is away from the level last sampled.
+                val = (c_nrzi && !i_brk) ? !armed[i_pin] : src_eff[0];
                 s = S_SYNC;
             end else begin
                 if (cur_mine) begin
@@ -330,14 +356,15 @@ module janus_hart (
                 1:  begin c_rs_en = v[3]; c_rs_pin = v[1:0]; end
                 2:  begin
                         c_stuff = v[3:0];
-                        if (v[3:0] != 0) begin
-                            crc = 0;
+                        c_ones = v[4];
+                        if (v[4:0] != 0) begin
+                            restart_crc;
                             run_len = 0;
                             run_valid = 1'b0;
                         end
                     end
                 3:  c_poly = v;
-                4:  c_width = v[4:0];
+                4:  begin c_width = v[4:0]; c_init1 = v[5]; restart_crc; end
                 5:  c_err = v[5:0];
                 6:  c_lose = v[1:0];
                 7:  c_clk = v[1:0];
@@ -346,6 +373,10 @@ module janus_hart (
                 10: c_cpha = v[0];
                 11: begin c_l2_en = v[5]; c_l2_pin = v[3:2]; c_l2_own = v[1:0]; end
                 12: c_div = v[7:0];
+                13: begin c_pair_en = v[3]; c_pair = v[1:0]; end
+                14: c_nrzi = v[0];
+                15: c_resid = v;
+                16: begin c_brk_en = v[6]; c_brk = v[5:0]; end
                 default: ;
             endcase
         end
@@ -371,6 +402,8 @@ module janus_hart (
         c_msb = 0; c_rs_en = 0; c_rs_pin = 0; c_stuff = 0; c_poly = 0;
         c_width = 0; c_err = 0; c_lose = WITNESS; c_clk = 0; c_clk_own = 0;
         c_cpol = 0; c_cpha = 0; c_l2_en = 0; c_l2_pin = 0; c_l2_own = 0; c_div = 0;
+        c_ones = 0; c_init1 = 0; c_pair_en = 0; c_pair = 0; c_nrzi = 0;
+        c_resid = 0; c_brk_en = 0; c_brk = 0;
         oe <= 0; ov <= 0; pc <= 0; pc_sel <= 64'd1;
         tx_pop <= 0; tx_clear <= 0; rx_push <= 0; seen_push <= 0; seen_push2 <= 0;
         push_data <= 0; push_data2 <= 0; violations <= 0; arb_lost <= 0;
@@ -398,6 +431,8 @@ module janus_hart (
             c_msb = 0; c_rs_en = 0; c_stuff = 0; c_poly = 0; c_width = 0; c_err = 0;
             c_lose = WITNESS; c_clk = 0; c_clk_own = 0; c_cpol = 0; c_cpha = 0;
             c_l2_en = 0; c_l2_pin = 0; c_l2_own = 0; c_div = 0;
+            c_ones = 0; c_init1 = 0; c_pair_en = 0; c_pair = 0; c_nrzi = 0;
+            c_resid = 0; c_brk_en = 0; c_brk = 0;
         end else if (div_cnt != c_div) begin
             // Between prescaled ticks the hart holds still, so with prescaler
             // D it behaves as the model does with each tick D+1 clocks long.
@@ -504,7 +539,7 @@ module janus_hart (
                                         taken = count != 0;
                                     end
                                     default: begin
-                                        taken = crc != 0;
+                                        taken = crc != c_resid;
                                         if (taken) violations_r = violations_r + 1'b1;
                                     end
                                 endcase
@@ -632,7 +667,7 @@ module janus_hart (
                       end
 
                       if (s == S_SYNC) begin
-                          if (!is_before(now, edge_t)) release_pin(i_pin);
+                          if (!is_before(now, edge_t)) put_release(i_pin);
                           if (pin[i_pin] == val && armed[i_pin] != val) begin
                               // A real change: set this bit's edge to the owner's.
                               edge_t = now - 12'd2;
@@ -644,7 +679,11 @@ module janus_hart (
                           if (is_before(now, edge_t)) resync(!cur_mine);
                           else begin
                               if (is_before(edge_t, now)) edge_t = now;
-                              if (cur_mine) drive(i_pin, val);
+                              if (cur_mine) begin
+                                  // NRZI: a 1 keeps the line level, a 0 changes it.
+                                  lvl = (c_nrzi && !i_brk) ? pin[i_pin] ^ !val : val;
+                                  put(i_pin, lvl, i_brk);
+                              end
                               s = S_MID;
                           end
                       end
@@ -652,28 +691,44 @@ module janus_hart (
                       if (s == S_MID) begin
                           if (is_before(now, edge_t + (i_dwell >> 1))) begin
                               resync(!cur_mine);
-                              if (!cur_mine) release_pin(i_pin);
+                              if (!cur_mine) put_release(i_pin);
                           end else begin
-                              if (!cur_mine) release_pin(i_pin);
-                              seen = pin[i_pin];
+                              if (!cur_mine) put_release(i_pin);
+                              raw = pin[i_pin];
+                              seen = (c_nrzi && !i_brk) ? raw == armed[i_pin] : raw;
+                              broke = !raw && (!c_pair_en || !pin[c_pair]);
                               armed = pin;
                               edge_t = edge_t + i_dwell;
-                              src_const = src_eff[1];
-                              if (!src_const) shift_in(1'b0, seen);
-                              is_data = inserted || !src_const;
-                              s = S_POST;
-                              if (!cur_mine) begin
-                                  if (src_const && seen != src_eff[0] && (inserted || !i_strm))
-                                      violations_r = violations_r + 1'b1;
-                              end else if (is_data) begin
-                                  if (c_lose != LOSE_NONE && val && !seen)
-                                      lose(i_pin, 1'b0, 3'd0);
-                              end else s = S_SETTLE;
+                              if (c_pair_en && broke && !cur_mine && !i_brk && c_brk_en) begin
+                                  // A listener met a break in an ordinary bit.
+                                  if (partial) violations_r = violations_r + 1'b1;
+                                  partial = 0;
+                                  inserted = 1'b0;
+                                  pc_r = c_brk;
+                                  s = S_FETCH;
+                              end else begin
+                                  src_const = src_eff[1];
+                                  if (!src_const) shift_in(1'b0, seen);
+                                  is_data = inserted || !src_const;
+                                  s = S_POST;
+                                  if (!cur_mine) begin
+                                      if (i_brk) begin
+                                          if (!i_strm && !broke)
+                                              violations_r = violations_r + 1'b1;
+                                      end else if (src_const && seen != src_eff[0] && (inserted || !i_strm))
+                                          violations_r = violations_r + 1'b1;
+                                  end else if (is_data) begin
+                                      if (c_lose != LOSE_NONE && val && !seen)
+                                          lose(i_pin, 1'b0, 3'd0);
+                                  end else s = S_SETTLE;
+                              end
                           end
                       end
 
                       if (s == S_SETTLE) begin
-                          if (!(od_mask[i_pin] && pin[i_pin] != val)) s = S_POST;
+                          // Under NRZI the level driven is not the bit value.
+                          if (!(od_mask[i_pin] && pin[i_pin] != (c_nrzi ? ov_r[i_pin] : val)))
+                              s = S_POST;
                       end
 
                       if (s == S_POST) begin
@@ -690,7 +745,7 @@ module janus_hart (
                                   run_len = 1;
                                   bit_done;
                               end
-                          end else if (c_stuff == 0) begin
+                          end else if ({c_ones, c_stuff} == 0 || i_brk) begin
                               bit_done;
                           end else begin
                               fb = seen ^ crc[c_width - 1'b1];
@@ -699,7 +754,7 @@ module janus_hart (
                               run_len = (run_valid && seen == run_val) ? run_len + 1'b1 : 4'd1;
                               run_val = seen;
                               run_valid = 1'b1;
-                              if (run_len == c_stuff) begin
+                              if (run_len == c_stuff && (seen || !c_ones)) begin
                                   inserted = 1'b1;
                                   stuff_bit = !seen;
                                   saved = seen;

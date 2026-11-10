@@ -18,7 +18,7 @@ peripheral, or a witness that checks the traffic without driving anything.
 | `docs/ISA.md` | Instruction set reference: encodings, traps, timing rules, toolchain |
 | `host/` | Host driver for a PC or a MicroPython board, with an example |
 | `demo/` | Interactive demo page built from model traces |
-| `janus.py`, `protocols.py`, `encode.py` | The model, the five protocol programs, and the assembler |
+| `janus.py`, `protocols.py`, `encode.py` | The model, the six protocol programs, and the assembler |
 | `test_*.py`, `reference.py` | Model tests against independent reference devices |
 | `check_sync.py` | Static checker for the `sync` rule |
 | `rtl/` | Working copy of the chip, plus replay, proof and planted-bug tools |
@@ -29,7 +29,9 @@ peripheral, or a witness that checks the traffic without driving anything.
 
 ## Status
 
-The design passes the full Tiny Tapeout flow, precheck and gate-level test.
+The design passed the full Tiny Tapeout flow, precheck and gate-level test
+before the USB additions; that version of the chip has not been through the
+flow yet.
 Everything below was checked in simulation or by formal proof.
 
 - UART, SPI, I2C, 1-Wire and CAN base frames run end to end through the host port,
@@ -42,6 +44,12 @@ Everything below was checked in simulation or by formal proof.
   complete protocol is fully proven.
 - CAN has no error frames or automatic retransmission, so it must not be used on
   a shared CAN bus.
+- Low-speed USB was a hold-out test. It failed on the frozen instruction set and
+  passes after four general additions: a complementary pin pair, NRZI, stuffing
+  of ones only, and a CRC start value and residual. The program covers one OUT
+  transaction at the packet layer and needs a 24 MHz clock. It has no address
+  filter, no IN transfers and no enumeration, and it has run in simulation only.
+  The record is in `KILL_TEST.md`.
 
 ## Running the checks
 
@@ -51,6 +59,7 @@ The model tests need only Python:
 python test_janus.py
 python test_onewire.py
 python test_can.py
+python test_usb.py
 python check_sync.py
 ```
 

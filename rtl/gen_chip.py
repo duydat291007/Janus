@@ -249,6 +249,13 @@ def main():
             ticks=50 * 110)
         add("can_stuffing", p.can(50), "S", "R", tx0=can_tx(0x000, [0, 0, 0, 0, 0]),
             ticks=50 * 125)
+        # USB OUT to address 5, endpoint 1, with an empty DATA0 packet: the
+        # token and the data packet fit the 8-entry queues. The released bus
+        # idles high here; the harts only need D- high.
+        usb_out = [0xE1, 0x85, 0x60, STOP, 0xC3, 0x00, 0x00, STOP]
+        add("usb_out", p.usb(16), "A", "B", tx0=usb_out, ticks=16 * 130, undriven_pin=True)
+        add("usb_no_device", p.usb(16), "A", WITNESS, tx0=usb_out, ticks=16 * 140,
+            undriven_pin=True)
     streaming(out)
     counts["uart_streaming"] = 20
     stuck_pins(out)

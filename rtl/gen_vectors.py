@@ -14,6 +14,7 @@ import janus  # noqa: E402
 import test_can  # noqa: E402
 import test_janus  # noqa: E402
 import test_onewire  # noqa: E402
+import test_usb  # noqa: E402
 from janus import RESTART, STOP, Hart  # noqa: E402
 
 
@@ -78,11 +79,13 @@ def write_hart(hart, base):
 def main():
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
-    for module in (test_janus, test_onewire, test_can):
+    for module in (test_janus, test_onewire, test_can, test_usb):
         module.Hart = RecHart
+    test_usb.TRIALS, test_usb.RANDOM_PAYLOADS = 30, 5   # keeps the replay short
     cases = [(n, f, a) for n, f, a in test_janus.TESTS]
     cases += [(f.__name__, f, ()) for f in test_onewire.TESTS]
     cases += [(f.__name__, f, ()) for f in test_can.TESTS]
+    cases += [(f.__name__, f, ()) for f in test_usb.TESTS]
     written = 0
     for name, fn, args in cases:
         RecHart.live = []

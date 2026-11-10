@@ -15,6 +15,14 @@ Programs for UART, SPI, I2C, 1-Wire and CAN base frames are in the project's
 assembler. CAN here has no error frames or automatic retransmission, so do not
 connect it to a shared CAN bus.
 
+There is also a program for the packet layer of low-speed USB: one OUT
+transaction of a token, a data packet and a handshake, with NRZI, bit stuffing,
+the D+/D- pair, a CRC16 check and the end of packet done on the chip. It needs
+a 24 MHz clock, which gives 16 ticks per bit at 1.5 Mbit/s; at 25 MHz the bit
+rate is 4% high, outside the USB tolerance. It has been checked in simulation
+only. It does not filter by address, enumerate, or handle IN transfers, and the
+electrical layer needs external parts.
+
 ## How to test
 
 Drive the host port at an SCK of at most 1/8 of the clock, SPI mode 0, MSB first.

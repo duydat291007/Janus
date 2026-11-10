@@ -45,6 +45,9 @@ checker.
 - The smallest dwell the formal proof covers is 4 ticks.
 - The `sync` rule: on every path into a `sync` bit, the line must be at the
   opposite level of the bit's constant. `check_sync.py` checks this statically.
+  It does not cover NRZI programs, where a `sync` bit waits for any change.
+- Between two timed bits there is room for a few instructions: with 16 ticks
+  per bit, at most 7. More than that makes the next bit late.
 
 ## Instruction words
 
@@ -61,10 +64,10 @@ Bits 31 to 28 hold the opcode. Unused bits must be 0.
 | 6 | `choice` | yes |
 | 7 | `match` | yes |
 | 8 | `counter` | no |
-| 9 | `mode` | only for `lose_to` |
+| 9 | `mode` | only for `lose_to` and `on_break` |
 
 "Role-dependent" means the instruction can make control flow differ between
-roles. A program should have few of them; the five reference programs have at
+roles. A program should have few of them; the six reference programs have at
 most 3.
 
 ### set: drive or release a pin
@@ -88,6 +91,7 @@ If the owner is mine, apply it. Takes one tick.
 | 16 | `sync`: listeners wait for the line to change to the constant |
 | 15 | `clocked`: timed by the clock pin set in `mode`, dwell is the half period |
 | 14 | timed: `free` (listeners do not check a constant). Clocked: `stream` |
+| 13 | timed: `brk`, a break bit |
 | 10:0 | dwell, in ticks (timed: bit time; clocked: half period) |
 
 - **Owner:** drives each bit. From the transmit byte (shifted by `msb`), the
@@ -96,7 +100,20 @@ If the owner is mine, apply it. Takes one tick.
   A constant that does not match counts a violation, unless `free`.
 - **Coder:** with stuffing enabled in `mode`, bits run through a run-length
   stuffer and the CRC. A missing stuff bit counts a violation and jumps to
-  `on_error`.
+  `on_error`. With the ones-only flag, only a run of 1s is counted and the
+  stuffed bit is a 0, as USB needs.
+- **Pair:** with `pair` set in `mode`, the owner drives a second pin as the
+  complement of the bit, and releasing the bit releases both.
+- **NRZI:** with `nrzi` set, a 0 is a change of level and a 1 is none. The
+  owner codes against the level on the line; a listener decodes against the
+  level it sampled one bit earlier. Constants, stuff bits, the CRC and the
+  received byte all use the decoded bit. A `sync` bit waits for a change away
+  from the last sampled level.
+- **Break:** a `brk` bit drives the pin and its pair low (SE0 in USB). It
+  bypasses NRZI and the coder. A listener counts a violation if either pin is
+  high, unless `free`. A listener that samples both pins low in an ordinary
+  bit, with `on_break` set, jumps there; a break in the middle of a byte
+  counts a violation first.
 - **Arbitration:** an owner that drives a 1 data bit and reads 0, with
   `lose_to` set to a role, becomes that role and stops driving. In clocked
   bits this applies to open-drain pins only.
@@ -153,7 +170,7 @@ logs it instead.
 | 2 | `last1` | the last bit seen was 1 |
 | 3 | `count0` | the counter is 0 |
 | 4 | `loop` | after decrementing, the counter is not 0 |
-| 5 | `crc_bad` | the CRC is not 0; also counts a violation |
+| 5 | `crc_bad` | the CRC differs from `resid` (0 unless set); also counts a violation |
 
 ### choice: let the sender decide
 
@@ -202,9 +219,9 @@ field.
 |---|---|---|
 | 0 | `msb` | bit 0: send and receive most significant bit first |
 | 1 | `resync` | bit 3 enable, bits 1:0 pin: listeners realign to falling edges on it |
-| 2 | `stuff` | bits 3:0: stuff after this many equal bits, 0 off; nonzero restarts the coder |
+| 2 | `stuff` | bits 3:0: stuff after this many equal bits, 0 off; bit 4: count only 1s and stuff a 0; nonzero restarts the coder |
 | 3 | `poly` | CRC polynomial |
-| 4 | `width` | bits 4:0: CRC width |
+| 4 | `width` | bits 4:0: CRC width; bit 5: the CRC restarts at all ones, not 0. Writing it restarts the CRC |
 | 5 | `on_error` | bits 5:0: address to jump to on a stuffing error |
 | 6 | `lose_to` | bits 1:0: role an owner takes on losing arbitration; 2 never loses |
 | 7 | `clk` | bits 1:0: clock pin for clocked bits |
@@ -213,6 +230,10 @@ field.
 | 10 | `cpha` | bit 0: clock phase |
 | 11 | `lane2` | bit 5 enable, bits 3:2 pin, bits 1:0 owner: a second data lane |
 | 12 | `div` | bits 7:0: prescaler; a tick lasts `div + 1` clocks |
+| 13 | `pair` | bit 3 enable, bits 1:0 pin: timed bits drive it as the complement |
+| 14 | `nrzi` | bit 0: timed bits are NRZI coded |
+| 15 | `resid` | the CRC value that `crc_bad` accepts |
+| 16 | `on_break` | bit 6 enable, bits 5:0: address a listener jumps to on a break |
 
 ## Traps
 
@@ -281,7 +302,7 @@ a checker that flags a bad start or stop bit.
 | Tool | Use |
 |---|---|
 | `janus.py` | Assembler (`Prog`) and the reference model the chip is checked against |
-| `protocols.py` | UART, SPI, I2C, 1-Wire and CAN programs |
+| `protocols.py` | UART, SPI, I2C, 1-Wire, CAN and low-speed USB programs |
 | `encode.py` | Turns a `Prog` into 32-bit words (`assemble`) and trap registers (`config_words`) |
 | `check_sync.py` | Static check of the `sync` rule |
 | `host/janus_host.py` | Host driver for the chip's SPI port, for a PC or MicroPython |

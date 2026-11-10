@@ -16,15 +16,15 @@ mutant() {
     else echo "BROKE PROOF ($result line ${fail:-?}) $name"; fi
 }
 
-mutant "listener releases at no point" 's/if (!cur_mine) release_pin(i_pin);/;/; s/^ *release_pin(i_pin);$/;/'
-mutant "owner drives inverted bit" 's/if (cur_mine) drive(i_pin, val);/if (cur_mine) drive(i_pin, !val);/'
+mutant "listener releases at no point" 's/if (!cur_mine) put_release(i_pin);/;/'
+mutant "owner drives inverted bit" 's/put(i_pin, lvl, i_brk);/put(i_pin, !lvl, i_brk);/'
 mutant "one role branches wrongly" 's/1: taken = !last;/1: taken = role == 0 ? !last : last;/'
 mutant "sample too early" 's/if (is_before(now, edge_t + (i_dwell >> 1))) begin/if (is_before(now, edge_t + (i_dwell >> 3))) begin/'
 mutant "owner skips readback" 's/if (!src_const) shift_in(1'"'"'b0, seen);/if (!src_const \&\& !cur_mine) shift_in(1'"'"'b0, seen);/'
 mutant "listener timing drifts" 's/edge_t = edge_t + i_dwell;/edge_t = edge_t + i_dwell + (role == 1);/'
 mutant "no long-idle fix" 's/if (s != S_MID \&\& is_before(edge_t, now)) edge_t = now;//'
 mutant "one role loads a different count" 's/else count = ins\[7:0\];/else count = ins[7:0] + (role == 1);/'
-mutant "listener samples the wrong pin" 's/seen = pin\[i_pin\];/seen = role == 1 ? pin[1] : pin[i_pin];/'
+mutant "listener samples the wrong pin" 's/raw = pin\[i_pin\];/raw = role == 1 ? pin[1] : pin[i_pin];/'
 mutant "one role uses a different CRC" 's/if (fb) crc = crc ^ c_poly;/if (fb) crc = crc ^ (role == 1 ? c_poly ^ 16'"'"'d1 : c_poly);/'
 mutant "stuff bit wrong polarity" 's/stuff_bit = !seen;/stuff_bit = seen;/'
 mutant "one role counts runs differently" 's/run_len = (run_valid \&\& seen == run_val) ? run_len + 1'"'"'b1 : 4'"'"'d1;/run_len = (run_valid \&\& seen == run_val) ? run_len + 1'"'"'b1 + (role == 1) : 4'"'"'d1;/'

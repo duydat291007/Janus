@@ -23,6 +23,7 @@ BUILDERS = {
     "i2c": lambda n: protocols.i2c(n),
     "onewire": lambda n: protocols.onewire(n),   # n is the prescaler
     "can": lambda n: protocols.can(n),
+    "usb": lambda n: protocols.usb(n),           # n is ticks per bit: 16 at 24 MHz
 }
 
 
