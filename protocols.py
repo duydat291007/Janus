@@ -1,9 +1,10 @@
-"""Five protocols, each written once as a whole-protocol program."""
-from janus import ALL, OPEN_DRAIN, PUSH_PULL, RESTART, STOP, Prog
+"""Six protocols, each written once as a whole-protocol program."""
+from janus import ALL, INIT1, ONES, OPEN_DRAIN, PUSH_PULL, RESTART, STOP, WITNESS, Prog
 
 A, B = "A", "B"  # UART sender and receiver
 C, T = "C", "T"  # controller and target
 S, R = "S", "R"  # CAN sender and receiver
+H, D = "A", "B"  # USB host and device
 
 
 def uart(bit):
@@ -197,4 +198,66 @@ def can(bit):
 
     p.label("bad")
     p.jump("bad")  # wait for the idle trap
+    return p
+
+
+def usb(bit):
+    """Low-speed USB, one OUT transaction: a token and a data packet from the
+    host, then a handshake from the device. The host queues each packet as
+    its bytes after SYNC, CRC included, then STOP. The chip does the line
+    code, the stuffing, the CRC16 check and the end of packet."""
+    p = Prog("usb", {"DP": PUSH_PULL, "DM": PUSH_PULL})
+    p.hold_trap("DM", 1, 17 * bit, "tmo")  # idle bus: no packet is coming
+
+    def sync(owner):
+        p.step("DM", owner, 0, bit, sync=True)  # SYNC: KJKJKJ, then KK
+        p.bits("DM", owner, 6, src=0, dwell=bit)
+        p.step("DM", owner, 1, bit)
+
+    p.mode(nrzi=True, pair="DP", resync="DM", poly=0x8005, width=16 | INIT1,
+           resid=0x800D, on_error="done", on_break="eop2")
+    p.label("top")
+    p.counter(2)  # two host packets: token, then data
+    p.claim(H, "DM")
+    p.label("packet")
+    p.mode(stuff=6 | ONES)  # a 0 after six 1s, from SYNC to the end of packet
+    sync(H)
+    p.load(H)
+    p.bits("DM", H, 8, dwell=bit)  # PID
+    p.store(D)
+    p.mode(width=16 | INIT1)  # the CRC starts after the PID
+    p.label("byte")
+    p.choice(H, [STOP], "eop")
+    p.load(H)
+    p.bits("DM", H, 8, dwell=bit)
+    p.store(D)
+    p.jump("byte")
+    p.label("eop")
+    p.bits("DM", H, 1, dwell=bit, brk=True)  # SE0; listeners see it and jump
+    p.label("eop2")
+    p.bits("DM", H, 1, dwell=bit, brk=True)
+    p.mode(stuff=0)  # the coder stops, so the CRC keeps its value
+    p.step("DM", H, 0, bit)  # J, as a change from SE0
+    p.step("DM", H, 1, bit)  # bus turnaround
+    p.loop("packet")
+    p.branch("crc_bad", "done")  # the data packet: no handshake for a bad CRC16
+
+    p.load(D, imm=0xD2)  # ACK
+    sync(D)
+    p.bits("DM", D, 8, dwell=bit)
+    p.store(H)
+    p.bits("DM", D, 2, dwell=bit, brk=True)
+    p.step("DM", D, 0, bit)
+    p.jump("done")
+
+    p.label("lost")  # no handshake came: every hart counts a violation
+    p.mode(width=16 | INIT1)
+    p.branch("crc_bad", "done")
+    p.label("done")
+    p.set("DM", ALL, None)
+    p.set("DP", ALL, None)
+    p.jump("top")
+    p.label("tmo")
+    p.branch("count0", "lost")  # the counter is 0 only while a handshake is due
+    p.jump("done")
     return p

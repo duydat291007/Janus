@@ -14,6 +14,8 @@ WITNESS = "witness"
 ALL = "all"  # every participant except a witness
 OPEN_DRAIN, PUSH_PULL = True, False
 SYNC_LAG = 2  # ticks from a hart driving a pin to any hart seeing it change
+ONES = 16   # mode(stuff=n | ONES): stuff a 0 after n ones; zeros are never stuffed
+INIT1 = 32  # mode(width=w | INIT1): the CRC restarts at all ones
 
 
 class Token:
@@ -63,7 +65,7 @@ class Prog:
         self._emit("set", pin=pin, owner=owner, val=val)
 
     def bits(self, pin, owner, n=1, src="tx", dwell=1, sync=False,
-             clocked=False, stream=False, free=False):
+             clocked=False, stream=False, free=False, brk=False):
         """All wire activity. src is "tx", "crc" or a constant 0 or 1.
 
         Timebase bits: the owner drives at the bit edge, and everyone samples
@@ -78,10 +80,12 @@ class Prog:
         clocked: timed by the clock in `mode`, with dwell as the half period.
         stream: refill and store between bytes with no gap. ROLE-DEPENDENT:
         only the clock owner decides to stop.
+        brk: a break. The owner drives the pin and its pair low; non-owners
+        flag anything else. A break bit bypasses the line code and the coder.
         """
         self._emit("bits", pin=pin, owner=owner, n=n, src=src, dwell=dwell,
                    sync=sync, clocked=clocked, stream=stream,
-                   free=free)
+                   free=free, brk=brk)
 
     def claim(self, party, pin, otherwise=None):
         """Wait for data to send (only the base role party) or for pin to
@@ -117,8 +121,14 @@ class Prog:
 
     def mode(self, **fields):
         """Write configuration: msb, resync, stuff, poly, width, on_error,
-        lose_to, clk, clk_owner, cpol, cpha, lane2, div. A lose_to other than the
-        default is ROLE-DEPENDENT. Setting stuff above 0 restarts the coder.
+        lose_to, clk, clk_owner, cpol, cpha, lane2, div, pair, nrzi, resid,
+        on_break. A lose_to other than the default is ROLE-DEPENDENT. Setting
+        stuff above 0 restarts the coder; writing width restarts the CRC.
+        pair: timed bits drive this pin as the complement of the bit's pin.
+        nrzi: a 0 is a change of level and a 1 is none.
+        resid: the CRC value that crc_bad accepts.
+        on_break: where a listener jumps when it samples both pins of a pair
+        low in an ordinary bit.
         Hardware writes one field per instruction word, so this emits one
         instruction for each field."""
         for name, value in fields.items():
@@ -198,7 +208,8 @@ class Hart:
         self.crc, self.run_len, self.run_val = 0, 0, None
         self.cfg = dict(msb=False, resync=None, stuff=0, poly=0, width=0,
                         on_error=None, lose_to=WITNESS, clk=None, clk_owner=None,
-                        cpol=0, cpha=0, lane2=None, div=0)
+                        cpol=0, cpha=0, lane2=None, div=0, pair=None,
+                        nrzi=False, resid=0, on_break=None)
         self.s1 = dict(bus.wire)
         self.pin = dict(bus.wire)
         self.armed = dict(bus.wire)  # pin levels when last sampled
@@ -282,7 +293,7 @@ class Hart:
             self.count -= 1
             taken = self.count > 0
         elif cond == "crc_bad":
-            taken = self.crc != 0
+            taken = self.crc != self.cfg["resid"]
             self.violations += taken
         else:
             taken = {"always": True, "last0": self.last == 0, "last1": self.last == 1,
@@ -309,7 +320,10 @@ class Hart:
     def _mode(self, **fields):
         self.cfg.update(fields)
         if fields.get("stuff"):
-            self.crc, self.run_len, self.run_val = 0, 0, None
+            self.run_len, self.run_val = 0, None
+        if fields.get("stuff") or "width" in fields:
+            width = self.cfg["width"]
+            self.crc = (1 << (width & 31)) - 1 if width & INIT1 else 0
 
     # Timed instructions
 
@@ -321,13 +335,16 @@ class Hart:
             sending = self.tx_q and self.pin[pin] == 1
             self.role = party if sending else otherwise
 
-    def _bits(self, pin, owner, n, src, dwell, sync, clocked, stream, free):
+    def _bits(self, pin, owner, n, src, dwell, sync, clocked, stream, free, brk):
         if clocked:
             yield from self._clocked_bits(pin, owner, n, dwell, stream)
             return
         for k in range(n):
             self.partial = k
-            yield from self._coded_bit(pin, owner, src, dwell, sync, free)
+            if brk:
+                yield from self._timed_bit(pin, owner, 0, dwell, sync, free, brk=True)
+            else:
+                yield from self._coded_bit(pin, owner, src, dwell, sync, free)
         self.partial = 0
 
     # One shifter
@@ -340,7 +357,7 @@ class Hart:
                 val, self.tx = self.tx & 1, self.tx >> 1
             return val
         if src == "crc":
-            return (self.crc >> (self.cfg["width"] - 1)) & 1
+            return (self.crc >> ((self.cfg["width"] & 31) - 1)) & 1
         return src
 
     def _shift_in(self, lane, seen):
@@ -353,7 +370,7 @@ class Hart:
     def _lose(self, pin, also=None):
         self.role, self.arb_lost = self.cfg["lose_to"], True
         self.tx_q.clear()
-        self._drive(pin, None)
+        self._put(pin, None)
         if also:
             self._drive(also, None)
 
@@ -369,7 +386,7 @@ class Hart:
         is held to the edge. The detected change sets the bit edge."""
         while True:
             if self.now >= self.edge:
-                self._drive(pin, None)
+                self._put(pin, None)
             level = self.pin[pin]
             if level == val and self.armed[pin] != val:
                 break
@@ -382,12 +399,24 @@ class Hart:
         if src in (0, 1) and seen != src:
             self.violations += 1
 
-    def _timed_bit(self, pin, owner, src, dwell, sync, free=False, data=None):
+    def _put(self, pin, level, brk=False):
+        """Drive or release a timed bit's pin and, with a pair, its complement.
+        A break drives both low."""
+        self._drive(pin, level)
+        pair = self.cfg["pair"]
+        if pair:
+            self._drive(pair, level if level is None or brk else 1 - level)
+
+    def _timed_bit(self, pin, owner, src, dwell, sync, free=False, data=None, brk=False):
         mine = self._mine(owner)
+        nrzi = self.cfg["nrzi"] and not brk
+        pair = self.cfg["pair"]
         self.dwell = dwell
         val = self._next_bit(src) if mine else None
+        level = val
         if sync and not mine:
-            yield from self._sync_bit(pin, src)
+            # Under NRZI the awaited change is away from the level last sampled.
+            yield from self._sync_bit(pin, 1 - self.armed[pin] if nrzi else src)
         else:
             while self.now < self.edge:
                 self._resync(val)
@@ -395,42 +424,56 @@ class Hart:
             if self.now > self.edge:
                 self.edge = self.now  # idle or late: this bit sets the timing
             if mine:
-                self._drive(pin, val)
+                if nrzi:  # a 1 keeps the line level, a 0 changes it
+                    level = self.pin[pin] ^ 1 ^ val
+                self._put(pin, level, brk)
         while self.now < self.edge + dwell // 2:
             self._resync(val)
             if not mine:
-                self._drive(pin, None)
+                self._put(pin, None)
             yield
         if not mine:
-            self._drive(pin, None)
-        seen = self.pin[pin]
+            self._put(pin, None)
+        raw = self.pin[pin]
+        seen = int(raw == self.armed[pin]) if nrzi else raw
+        broke = raw == 0 and (not pair or self.pin[pair] == 0)
         self.armed = dict(self.pin)
         self.edge += dwell
+        if pair and broke and not mine and not brk and self.cfg["on_break"] is not None:
+            if self.partial:  # the break cut a byte short
+                self.violations += 1
+            self.partial = 0
+            self.gen = self._run(self.prog.labels[self.cfg["on_break"]])
+            yield  # this generator is abandoned here
         if src in ("tx", "crc"):  # constants and stuff bits are framing, not data
             self._shift_in(0, seen)
         is_data = data if data is not None else src in ("tx", "crc")
         if not mine:
-            if not free:
+            if brk:
+                if not free and not broke:
+                    self.violations += 1
+            elif not free:
                 self._check(src, seen)
         elif is_data:
             if self.cfg["lose_to"] and val == 1 and seen == 0:
                 self._lose(pin)
         else:
-            yield from self._settled(pin, val)
+            yield from self._settled(pin, level)
         return seen
 
     def _coded_bit(self, pin, owner, src, dwell, sync, free):
         seen = yield from self._timed_bit(pin, owner, src, dwell, sync, free)
-        if not self.cfg["stuff"]:
+        stuff = self.cfg["stuff"]
+        if not stuff:
             return
-        width = self.cfg["width"]
+        width = self.cfg["width"] & 31
         feedback = seen ^ ((self.crc >> (width - 1)) & 1)
         self.crc = (self.crc << 1) & ((1 << width) - 1)
         if feedback:
             self.crc ^= self.cfg["poly"]
         self.run_len = self.run_len + 1 if seen == self.run_val else 1
         self.run_val = seen
-        if self.run_len == self.cfg["stuff"]:
+        if self.run_len == stuff & 15 and (seen or not stuff & ONES):
             extra = yield from self._timed_bit(pin, owner, 1 - seen, dwell, False, False,
                                                data=True)
             if extra == seen:

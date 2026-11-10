@@ -9,7 +9,8 @@ OPS = ["set", "bits", "claim", "load", "store", "branch", "choice", "match",
        "counter", "mode"]
 CONDS = ["always", "last0", "last1", "count0", "loop", "crc_bad"]
 MODE_FIELDS = ["msb", "resync", "stuff", "poly", "width", "on_error", "lose_to",
-               "clk", "clk_owner", "cpol", "cpha", "lane2", "div"]
+               "clk", "clk_owner", "cpol", "cpha", "lane2", "div", "pair", "nrzi",
+               "resid", "on_break"]
 ROLE = {"A": 0, "C": 0, "S": 0, "B": 1, "T": 1, "R": 1, ALL: 2, WITNESS: 3}
 LOSE_NONE = 2
 
@@ -24,6 +25,10 @@ def _mode_value(prog, name, value, base=0):
         return 8 | pin_index(prog, value)
     if name == "on_error":
         return prog.labels[value] + base
+    if name == "pair":
+        return 0 if value is None else 8 | pin_index(prog, value)
+    if name == "on_break":
+        return 0 if value is None else 64 | (prog.labels[value] + base)
     if name == "lose_to":
         return LOSE_NONE if value is None else ROLE[value]
     if name == "clk":
@@ -47,7 +52,7 @@ def encode(prog, ins, base=0):
         return (word | pin_index(prog, a["pin"]) << 25 | ROLE[a["owner"]] << 23
                 | src << 21 | (a["n"] - 1) << 17 | a["sync"] << 16
                 | a["clocked"] << 15 | (a["stream"] or a["free"]) << 14
-                | a["dwell"])
+                | a["brk"] << 13 | a["dwell"])
     if op == "claim":
         other = a["otherwise"]
         return (word | pin_index(prog, a["pin"]) << 25 | ROLE[a["party"]] << 23

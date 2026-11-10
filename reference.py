@@ -758,6 +758,7 @@ def usb_decode(trace, bit):
         while True:
             t = start + round(k * bit + bit / 2)
             if t >= n:
+                i = n              # the trace ends inside this packet
                 break
             now = state(t)
             if now == SE0:
@@ -795,3 +796,34 @@ def usb_decode(trace, bit):
             packet.update(data=data, crc_ok=usb_crc16(data) == crc)
         packets.append(packet)
     return packets
+
+
+class UsbDevice(Agent):
+    """A device that answers a good data packet with ACK. It finds the end of
+    a packet as SE0 followed by J, decodes the wire so far with usb_decode,
+    and drives the handshake `turn` bit times after the end of packet."""
+
+    def __init__(self, bus, bit, turn=3.0):
+        super().__init__(bus)
+        self.bit, self.turn, self.acks = bit, turn, 0
+        self.gen = self._go()
+
+    def _go(self):
+        prev, handled = J, 0
+        while True:
+            now = (self.bus.wire["DP"], self.bus.wire["DM"])
+            if prev == SE0 and now == J:
+                packets = usb_decode(self.bus.trace, self.bit)
+                fresh, handled = len(packets) > handled, len(packets)
+                last = packets[-1] if packets else {}
+                good = (last.get("pid") in (PID_DATA0, PID_DATA1) and last.get("crc_ok")
+                        and last["pid_ok"] and last["eop"] and not last["stuff_error"])
+                if fresh and good:
+                    yield from _wait(round(self.turn * self.bit) - 1)
+                    for dp, dm in usb_line(usb_packet_bits(PID_ACK)):
+                        self.out = {"DP": dp, "DM": dm}
+                        yield from _wait(self.bit)
+                    self.out = {}
+                    self.acks += 1
+            prev = now
+            yield
