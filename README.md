@@ -29,9 +29,9 @@ peripheral, or a witness that checks the traffic without driving anything.
 
 ## Status
 
-The design passed the full Tiny Tapeout flow, precheck and gate-level test
-before the USB additions; that version of the chip has not been through the
-flow yet.
+The design with the USB additions passes the full Tiny Tapeout flow, precheck
+and gate-level test. The 16-entry queues added after that have not been
+through the flow yet.
 Everything below was checked in simulation or by formal proof.
 
 - UART, SPI, I2C, 1-Wire and CAN base frames run end to end through the host port,

@@ -738,3 +738,22 @@ Limits, stated plainly:
 - `check_sync.py` does not cover `sync` bits under NRZI.
 - The reference decoder was changed after stage 1: it hung when a trace ended
   inside a packet. No decoding rule changed.
+
+### After stage 2: 16-entry queues
+
+The stage 2 build passed the Tiny Tapeout flow: layout, precheck and the
+gate-level test.
+
+The first limit above is now removed. Both queues of each hart went from 8 to
+16 entries, which is exactly what a token and a full 8-byte data packet need
+to send (16 entries) and more than the device needs to receive (14 bytes).
+Two chip scenarios run the 8-byte OUT transaction, with stuffed bits, through
+the host port and the real queues, in loopback and on the pins: host with
+device, and host with witness. Chip scenarios are 52 of 52 with 639 byte
+checks. 20 of 20 chip planted bugs are caught, and cocotb is 4 of 4.
+
+Cost: 294 flops and 8.9% area (283,565 to 308,867 um2 synthesized). The
+queues are exactly full in that transaction, so a longer packet or a second
+transaction queued early would still overflow. The hart did not change, so
+its replay, proof and planted-bug results stand. This version has not been
+through the Tiny Tapeout flow yet.

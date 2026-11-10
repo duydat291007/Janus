@@ -14,7 +14,7 @@ The behaviour described here is what `janus.py` models and what the Verilog in
 | Harts | Two independent harts. Each runs one program at a time. |
 | Program memory | 64 words of 32 bits, shared by both harts. Jump targets are absolute addresses. |
 | Pins | A hart uses up to 4 of the chip's 8 protocol pins, chosen by a pin rotation register. Each pin is open drain or push-pull, set by the host. |
-| Queues | Per hart: an 8-entry transmit queue (data, STOP or RESTART) and an 8-entry receive queue. |
+| Queues | Per hart: a 16-entry transmit queue (data, STOP or RESTART) and a 16-entry receive queue. |
 | Tick | The hart's unit of time. One clock, or `div + 1` clocks with the prescaler set. All dwell times are in ticks. |
 | Role | 0 (A, C or S), 1 (B, T or R), or 3 (witness). Set by the host; some instructions may change it while a program runs. |
 

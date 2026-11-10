@@ -170,7 +170,7 @@ def scenario(out, name, prog, role0, role1, tx0=(), tx1=(), addr0=None, addr1=No
 
 
 def streaming(out):
-    """Twenty bytes through 8-entry FIFOs, while the protocol runs."""
+    """Twenty bytes through 16-entry FIFOs, while the protocol runs."""
     prog = p.uart(50)
     data = [(i * 37 + 11) & 0xFF for i in range(20)]
     s = Script()
@@ -250,11 +250,18 @@ def main():
         add("can_stuffing", p.can(50), "S", "R", tx0=can_tx(0x000, [0, 0, 0, 0, 0]),
             ticks=50 * 125)
         # USB OUT to address 5, endpoint 1, with an empty DATA0 packet: the
-        # token and the data packet fit the 8-entry queues. The released bus
+        # token and the data packet are 8 queue entries. The released bus
         # idles high here; the harts only need D- high.
         usb_out = [0xE1, 0x85, 0x60, STOP, 0xC3, 0x00, 0x00, STOP]
         add("usb_out", p.usb(16), "A", "B", tx0=usb_out, ticks=16 * 130, undriven_pin=True)
         add("usb_no_device", p.usb(16), "A", WITNESS, tx0=usb_out, ticks=16 * 140,
+            undriven_pin=True)
+        # The same with a full 8-byte DATA0 packet, which needs stuffed bits:
+        # 16 entries to send and 14 bytes to receive, a full 16-entry queue.
+        usb_full = [0xE1, 0x85, 0x60, STOP, 0xC3, 0x00, 0x01, 0x7F, 0xFF, 0xFE, 0x80, 0xA5, 0x3C, 0xFB, 0xAE, STOP]
+        add("usb_out_8_bytes", p.usb(16), "A", "B", tx0=usb_full, ticks=16 * 240,
+            undriven_pin=True)
+        add("usb_witness_8_bytes", p.usb(16), "A", WITNESS, tx0=usb_full, ticks=16 * 250,
             undriven_pin=True)
     streaming(out)
     counts["uart_streaming"] = 20

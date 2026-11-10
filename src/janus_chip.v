@@ -121,11 +121,11 @@ module janus_unit (
         .violations(violations), .arb_lost(arb_lost),
         .cfg_we(reg_we && reg_addr < 4'd6), .cfg_addr(reg_addr[2:0]), .cfg_data(reg_data));
 
-    janus_fifo #(.W(10)) tx_fifo (
+    janus_fifo #(.W(10), .LOG(4)) tx_fifo (
         .clk(clk), .rst(por), .clear(tx_clear), .push(tx_push), .din(tx_din),
         .pop(tx_pop), .dout({tx_ctl, tx_data}), .empty(tx_empty), .full(tx_full));
 
-    janus_fifo #(.W(8)) rx_fifo (
+    janus_fifo #(.W(8), .LOG(4)) rx_fifo (
         .clk(clk), .rst(por), .clear(1'b0), .push(rx_in), .din(rx_din),
         .pop(rx_pop), .dout(rx_head), .empty(rx_empty), .full(rx_full));
 
