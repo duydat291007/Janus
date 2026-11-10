@@ -755,5 +755,5 @@ checks. 20 of 20 chip planted bugs are caught, and cocotb is 4 of 4.
 Cost: 294 flops and 8.9% area (283,565 to 308,867 um2 synthesized). The
 queues are exactly full in that transaction, so a longer packet or a second
 transaction queued early would still overflow. The hart did not change, so
-its replay, proof and planted-bug results stand. This version has not been
-through the Tiny Tapeout flow yet.
+its replay, proof and planted-bug results stand. This version then passed
+the Tiny Tapeout flow: layout, precheck and the gate-level test.

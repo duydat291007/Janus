@@ -218,8 +218,8 @@ def usb(bit):
            resid=0x800D, on_error="done", on_break="eop2")
     p.label("top")
     p.counter(2)  # two host packets: token, then data
-    p.claim(H, "DM")
     p.label("packet")
+    p.claim(H, "DM")  # a host with nothing queued sends nothing
     p.mode(stuff=6 | ONES)  # a 0 after six 1s, from SYNC to the end of packet
     sync(H)
     p.load(H)
@@ -227,7 +227,7 @@ def usb(bit):
     p.store(D)
     p.mode(width=16 | INIT1)  # the CRC starts after the PID
     p.label("byte")
-    p.choice(H, [STOP], "eop")
+    p.choice(H, [STOP, None], "eop")  # an empty queue also ends the packet
     p.load(H)
     p.bits("DM", H, 8, dwell=bit)
     p.store(D)

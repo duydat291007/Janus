@@ -196,8 +196,11 @@ def _wait(n):
 
 
 class Hart:
-    def __init__(self, prog, role, bus, addr=None, tx=()):
+    def __init__(self, prog, role, bus, addr=None, tx=(), fault=None):
+        """fault: this hart is an adversary. It drives the wrong level for
+        the timed bit it owns with this number, counting from 0, once."""
         self.prog, self.base_role, self.role = prog, role, role
+        self.fault, self.owned = fault, 0
         self.bus, self.addr = bus, addr
         self.out = {}
         self.tx_q, self.rx_q, self.seen = deque(tx), deque(), deque()
@@ -409,7 +412,7 @@ class Hart:
             self._drive(pair, level if level is None or brk else 1 - level)
 
     def _timed_bit(self, pin, owner, src, dwell, sync, free=False, data=None, brk=False):
-        mine = self._mine(owner)
+        mine, faulty = self._mine(owner), False
         nrzi = self.cfg["nrzi"] and not brk
         pair = self.cfg["pair"]
         self.dwell = dwell
@@ -427,6 +430,10 @@ class Hart:
             if mine:
                 if nrzi:  # a 1 keeps the line level, a 0 changes it
                     level = self.pin[pin] ^ 1 ^ val
+                if self.fault is not None:
+                    if self.owned == self.fault:  # the adversary's one wrong bit
+                        level, self.fault, faulty = 1 - level, None, True
+                    self.owned += 1
                 self._put(pin, level, brk)
         while self.now < self.edge + dwell // 2:
             self._resync(val)
@@ -456,14 +463,16 @@ class Hart:
             elif not free:
                 self._check(src, seen)
         elif is_data:
-            if self.cfg["lose_to"] and val == 1 and seen == 0:
+            if self.cfg["lose_to"] and val == 1 and seen == 0 and not faulty:
                 self._lose(pin)
         else:
             yield from self._settled(pin, level)
-        return seen
+        # The coder follows the bit an owner meant to send, not its readback:
+        # a bit corrupted on the wire must not end up in the sender's own CRC.
+        return val if mine and self._mine(owner) else seen
 
     def _coded_bit(self, pin, owner, src, dwell, sync, free):
-        seen = yield from self._timed_bit(pin, owner, src, dwell, sync, free)
+        seen = yield from self._timed_bit(pin, owner, src, dwell, sync, free)  # the coded bit
         stuff = self.cfg["stuff"]
         if not stuff:
             return
