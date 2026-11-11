@@ -94,7 +94,8 @@ def test_uart_owner_and_listener_agree_on_last_bit():
     tx = Hart(prog, A, bus, tx=[0x80])
     rx = Hart(prog, B, bus)
     bus.add(tx, rx)
-    bus.run(BIT * 9 + BIT // 2)
+    # The idle bit, the start bit and 8 data bits, then half a bit more.
+    bus.run(BIT * 10 + BIT // 2)
     assert tx.last == rx.last == 1, (tx.last, rx.last)
 
 
@@ -120,6 +121,28 @@ def test_violation_count_stops_at_255():
     bus.run(16 * 10 * 300 + 100)
     assert len(w.seen) >= 290, len(w.seen)   # the witness followed about 300 frames
     assert w.violations == 255, w.violations
+
+
+@case((1, 0), (1, 700), (0, 0), (0, 700))
+def test_uart_sends_only_what_was_queued(pull, queue_at):
+    """A push-pull pin with no pull-up may read low until the sender first
+    drives it. The sender must not take that for a line in use, and the
+    receiver must still catch the first frame."""
+    prog = uart(BIT)
+    bus = Bus(prog.pins, pull=pull)
+    tx, rx, w = Hart(prog, A, bus), Hart(prog, B, bus), Hart(prog, WITNESS, bus)
+    bus.add(tx, rx, w)
+    bus.run(queue_at)
+    assert not rx.rx_q and not w.seen, (rx.rx_q, w.seen)
+    tx.tx_q.extend([0xA5, 0x3C])
+    bus.run(BIT * 24)
+    assert list(rx.rx_q) == list(w.seen) == [0xA5, 0x3C], (rx.rx_q, w.seen)
+    assert (tx.violations, rx.violations, w.violations) == (0, 0, 0)
+    # The line is the sender's from its second tick on.
+    assert ref.decode_uart(bus.trace[2:], BIT) == ([0xA5, 0x3C], 0)
+    # The first start bit comes after at least one bit time of idle.
+    line = [t["TX"] for t in bus.trace]
+    assert line.index(0, 2) - 2 >= BIT, line.index(0, 2)
 
 
 @case(40000, 66000)

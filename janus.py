@@ -179,10 +179,12 @@ class Prog:
 
 
 class Bus:
-    def __init__(self, pins):
-        self.pins = pins
+    def __init__(self, pins, pull=1):
+        """pull: what a push-pull pin reads while nothing drives it. An
+        open-drain pin always has a pull-up."""
+        self.pins, self.pull = pins, pull
         self.agents, self.trace = [], []
-        self.wire = {p: 1 for p in pins}
+        self.wire = {p: 1 if open_drain else pull for p, open_drain in pins.items()}
         self.contentions = 0
 
     def add(self, *agents):
@@ -196,7 +198,7 @@ class Bus:
             else:
                 if len(set(drives)) > 1:
                     self.contentions += 1
-                self.wire[pin] = drives[0] if drives else 1  # pull-up
+                self.wire[pin] = drives[0] if drives else self.pull
 
     def tick(self):
         self._resolve()

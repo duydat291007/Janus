@@ -67,7 +67,8 @@ def describe(ins):
     if ins.op == "bits" and a["src"] == "tx":
         return f"{a['n']} data bits: {a['owner']} drives, the others sample mid-bit"
     if ins.op == "bits":
-        wait = "; the others wait for the edge" if a["sync"] else "; the others check it"
+        wait = ("; the others wait for the edge" if a["sync"]
+                else "; nobody checks it" if a["free"] else "; the others check it")
         return f"one bit: {a['owner']} drives {a['src']}{wait}"
     if ins.op == "branch":
         return f"jump to '{a['label']}'"
@@ -96,8 +97,9 @@ def run(glitch):
 
 def main():
     prog, clean = run(None)
+    # The stop bit is the constant 1 that listeners check; the idle bit is not.
     stop_pc = next(i for i, ins in enumerate(prog.code)
-                   if ins.op == "bits" and ins.args["src"] == 1)
+                   if ins.op == "bits" and ins.args["src"] == 1 and not ins.args["free"])
     first_stop = next(t for t, r in enumerate(clean) if r["A"]["pc"] == stop_pc)
     # The stop bit reaches the wire a few ticks after the sender starts it.
     stop_on_wire = next(t for t in range(first_stop, len(clean)) if clean[t]["wire"] == 1)

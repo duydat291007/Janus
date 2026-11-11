@@ -87,10 +87,20 @@ def no_clock_stretch_wait():
     Hart._settled = lambda self, pin, val: iter(())
 
 
+def uart_without_the_idle_bit():
+    """The UART program as it was: the first claim follows the set at once."""
+    original = Prog.step
+
+    def no_idle(self, pin, owner, val, dwell, sync=False, free=False):
+        if not free:
+            original(self, pin, owner, val, dwell, sync, free)
+    Prog.step = no_idle
+
+
 MUTANTS = [bit_reversed_on_both_sides, ack_polarity_inverted_on_both_sides,
            witness_never_flags_mid_byte_end, unaddressed_target_never_steps_aside,
            receiver_samples_at_bit_start, spi_sampling_edge_swapped,
-           no_clock_stretch_wait]
+           no_clock_stretch_wait, uart_without_the_idle_bit]
 
 if __name__ == "__main__":
     saved_hart, saved_prog = dict(vars(Hart)), dict(vars(Prog))

@@ -11,6 +11,11 @@ H, D = "A", "B"  # USB host and device
 def uart(bit):
     p = Prog("uart", {"TX": PUSH_PULL})
     p.set("TX", A, 1)
+    # One bit time of idle before the first frame. A pin shows a level two
+    # ticks after it is driven, so without this the first claim could read
+    # the level from before the set, and a receiver would start without
+    # having seen the line high.
+    p.step("TX", A, 1, bit, free=True)
     p.label("idle")
     p.claim(A, "TX")
     p.load(A)

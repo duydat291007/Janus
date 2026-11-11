@@ -205,6 +205,28 @@ def stuck_pins(out):
     s.write(os.path.join(out, "uart_pads_stuck.hex"))
 
 
+def quiet_start(out):
+    """External mode on a pin that reads low until the sender drives it, with
+    nothing queued: the sender must stay quiet until a byte arrives, and the
+    receiver must catch the first frame."""
+    prog = p.uart(50)
+    data = [0xA5, 0x3C]
+    s = Script()
+    s.raw(PULL, 0)
+    s.load(prog)
+    s.setup(0, prog, "A", 0, None, 0)
+    s.setup(1, prog, "B", 0, None, 0)
+    s.run(1, 1, 0)
+    s.wait(50 * 14)
+    s.expect_status(1, 0, 0xFF, RX_EMPTY | TX_EMPTY)
+    s.push(0, data)
+    s.wait(50 * 11 * len(data) + MARGIN)
+    s.expect_rx(1, data)
+    s.expect_status(1, 0, 0xFF, RX_EMPTY | TX_EMPTY)
+    s.expect_status(0, 0, 0xFF, RX_EMPTY | TX_EMPTY)
+    s.write(os.path.join(out, "uart_quiet_start.hex"))
+
+
 def can_tx(can_id, data):
     return [(can_id >> 8) << 5, can_id & 0xFF, len(data) << 1, *data]
 
@@ -228,8 +250,8 @@ def main():
             ticks=50 * 13)
         add("uart_witness", p.uart(50), "A", WITNESS, tx0=data, ticks=50 * 62)
         add("uart_at_address_20", p.uart(50), "A", "B", tx0=data, ticks=50 * 62, base=20)
-        # The top words of the 64-word memory: words 56 to 63.
-        add("uart_at_address_56", p.uart(50), "A", "B", tx0=data, ticks=50 * 62, base=56)
+        # The top words of the 64-word memory: words 55 to 63.
+        add("uart_at_address_55", p.uart(50), "A", "B", tx0=data, ticks=50 * 62, base=55)
         add("uart_rotated_pins", p.uart(50), "A", "B", tx0=data, ticks=50 * 62, rot=3)
         for mode, (cpol, cpha) in enumerate(((0, 0), (0, 1), (1, 0), (1, 1))):
             add(f"spi_mode{mode}", p.spi(10, cpol, cpha), "C", "T",
@@ -282,12 +304,15 @@ def main():
             ticks=50 * 130, fault0=30)
         add("adversary_can_witness", p.can(50), "S", WITNESS,
             tx0=can_tx(0x7F0, [1, 2, 3, 4, 5]), ticks=50 * 130, fault0=45)
+        # Hart 0's timed bits: 0 idle, 1 start, 2 to 9 data, 10 the stop bit.
         add("adversary_uart_stop_bit", p.uart(50), "A", WITNESS, tx0=[0x5A], ticks=50 * 20,
-            fault0=9)
+            fault0=10)
     streaming(out)
     counts["uart_streaming"] = 20
     stuck_pins(out)
     counts["uart_pads_stuck"] = 0
+    quiet_start(out)
+    counts["uart_quiet_start"] = 2
     for name, n in counts.items():
         print(name, n)
 

@@ -141,6 +141,13 @@ Waits until the party (by base role) has data to send, or the pin goes low.
 With bit 22 set, the party keeps its role if it has data and the pin is high,
 and otherwise takes the role in bits 21:20, as CAN arbitration needs.
 
+A hart sees a pin two ticks after it is driven, so a `claim` right after a
+`set` of the same pin reads the level from before the `set`. On a push-pull
+pin with no pull-up that level may be low, and the hart would take the line
+for one in use. Hold the level for a timed bit first, as the UART example
+does. That bit also lets every listener sample the line once before the
+first `sync` bit, which is what a `sync` wait compares against.
+
 ### load: fill the transmit byte
 
 | Bits | Field |
@@ -300,6 +307,7 @@ fault injection.
 def uart(bit):
     p = Prog("uart", {"TX": PUSH_PULL})
     p.set("TX", A, 1)
+    p.step("TX", A, 1, bit, free=True)  # one bit time of idle before the first frame
     p.label("idle")
     p.claim(A, "TX")
     p.load(A)
@@ -316,13 +324,14 @@ Assembled with `bit = 50`:
 | Address | Word | Instruction | Meaning |
 |---|---|---|---|
 | 0 | `00200000` | `set` | A drives TX high |
-| 1 | `20000000` | `claim` | wait until A has a byte, or the line falls |
-| 2 | `30000000` | `load` | A takes the next byte |
-| 3 | `10410032` | `bits` | start bit: A drives 0; others wait for the falling edge |
-| 4 | `100E0032` | `bits` | 8 data bits from A's byte, 50 ticks each |
-| 5 | `44000000` | `store` | B keeps the byte; a witness logs it |
-| 6 | `10600032` | `bits` | stop bit: A drives 1; others check it |
-| 7 | `50000001` | `branch` | back to `idle` |
+| 1 | `10604032` | `bits` | idle: A holds 1 for one bit time; nobody checks it |
+| 2 | `20000000` | `claim` | wait until A has a byte, or the line falls |
+| 3 | `30000000` | `load` | A takes the next byte |
+| 4 | `10410032` | `bits` | start bit: A drives 0; others wait for the falling edge |
+| 5 | `100E0032` | `bits` | 8 data bits from A's byte, 50 ticks each |
+| 6 | `44000000` | `store` | B keeps the byte; a witness logs it |
+| 7 | `10600032` | `bits` | stop bit: A drives 1; others check it |
+| 8 | `50000002` | `branch` | back to `idle` |
 
 Run as role A it is a UART transmitter, as role B a receiver, and as a witness
 a checker that flags a bad start or stop bit.

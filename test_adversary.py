@@ -170,17 +170,18 @@ def can_sender_fault_anywhere():
 @case
 def uart_fault_in_each_bit():
     sent = 0x5A
-    for n in range(1, 10):                   # bits 1 to 8 are data, 9 is the stop bit
+    # Bit 0 is the idle bit before the first frame and bit 1 the start bit.
+    for n in range(2, 11):                   # bits 2 to 9 are data, 10 is the stop bit
         prog = protocols.uart(50)
         bus = Bus(prog.pins)
         a = Hart(prog, "A", bus, tx=[sent, 0xC3], fault=n)
         b, w = Hart(prog, "B", bus), Hart(prog, WITNESS, bus)
         bus.add(a, b, w)
         bus.run(50 * 30)
-        if n == 9:
+        if n == 10:
             assert w.violations and b.violations, "a bad stop bit went unnoticed"
         else:                                # the wrong byte arrives, and nothing can tell
-            assert list(b.rx_q) == [sent ^ 1 << (n - 1), 0xC3], (n, list(b.rx_q))
+            assert list(b.rx_q) == [sent ^ 1 << (n - 2), 0xC3], (n, list(b.rx_q))
             assert not w.violations
 
 
