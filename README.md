@@ -30,21 +30,28 @@ peripheral, or a witness that checks the traffic without driving anything.
 ## Status
 
 The design passed the full Tiny Tapeout flow: layout, precheck and gate-level
-test. Later commits changed only the proof, its tools and the documents, not
-the chip's logic. Everything below was checked in simulation or by formal
-proof.
+test. Later commits changed only the proofs, their tools, the documents and
+the UART program, which a host loads at run time. The chip's logic is the
+same. Everything below was checked in simulation or by formal proof.
 
 - UART, SPI, I2C, 1-Wire and CAN base frames run end to end through the host port,
   and 1-Wire also at real 1 us timing using the prescaler.
 - The Verilog matches the Python model tick for tick, and clock for clock with
   the prescaler set.
-- An unbounded proof covers timed bits, `sync`, stuffing, CRC, NRZI, the pin
-  pair and break bits on the real Verilog, for every program in that subset:
-  the two harts stay in step, the listener reads what the owner sent, and
-  neither counts a violation the other does not. It does not yet cover the
-  jump on a break, `set`, clocked bits,
-  traps, `claim`, `choice`, `match`, arbitration, resync or witnesses, so no
-  complete protocol is fully proven.
+- One protocol is proven whole: UART. An unbounded proof runs the program
+  word for word on two real harts, for any bit time from 8 ticks, any bytes
+  arriving at any time, any load address, and a line that reads anything
+  while undriven. Every byte the receiver stores is the byte the sender took,
+  none is lost or invented, nothing is flagged, and a monitor that sees only
+  the wire reads exact 8N1 frames. Writing it exposed a start-up bug in the
+  program, now fixed: on a pin that read low before the first frame, the
+  sender could emit a byte nobody queued.
+- A second unbounded proof covers timed bits, `sync`, stuffing, CRC, NRZI,
+  the pin pair and break bits for every program in that subset: the two harts
+  stay in step, the listener reads what the owner sent, and neither counts a
+  violation the other does not. It does not cover the jump on a break, `set`,
+  clocked bits, traps, `claim`, `choice`, `match`, arbitration, resync or
+  witnesses, so the other five protocols are not proven whole.
 - CAN has no error frames or automatic retransmission, so it must not be used on
   a shared CAN bus.
 - Low-speed USB was a hold-out test. It failed on the frozen instruction set and
@@ -82,6 +89,8 @@ bash chip.sh test
 bash run.sh replay
 bash div_replay.sh
 bash prove_ind.sh d4
+bash prove_uart.sh
+bash sim_uart.sh        # the UART proof's harness, simulated on random inputs
 bash final_check.sh     # every planted-bug set and proof task
 bash chip.sh synth
 ```

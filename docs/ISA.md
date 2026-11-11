@@ -43,7 +43,8 @@ checker.
   samples at the middle (edge + dwell/2) and moves on.
 - Instructions between bits do not stretch the bit: the next bit's edge is the
   previous edge plus dwell.
-- The smallest dwell the formal proof covers is 4 ticks.
+- The smallest dwell the formal proof of the instruction subset covers is 4
+  ticks. The proof of the whole UART program covers bit times from 8 ticks.
 - The `sync` rule: on every path into a `sync` bit, the line must be at the
   opposite level of the bit's constant. `check_sync.py` checks this statically.
   Under NRZI a `sync` bit waits for a change of level, so it must send a 0,

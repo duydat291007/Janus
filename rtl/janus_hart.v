@@ -60,6 +60,7 @@ module janus_hart (
     output            dbg_stuff_bit,
     output     [4:0]  dbg_width,
     output     [7:0]  dbg_viol,
+    output     [7:0]  dbg_tx,
     output            dbg_clean
 `endif
 );
@@ -160,6 +161,7 @@ module janus_hart (
     assign dbg_stuff_bit = stuff_bit;
     assign dbg_width = c_width;
     assign dbg_viol = violations_r;
+    assign dbg_tx = tx;
     // Everything the restricted program subset can never change from reset.
     assign dbg_clean = !c_rs_en && !lf_valid && c_lose == WITNESS
         && !c_l2_en && c_div == 0 && div_cnt == 0

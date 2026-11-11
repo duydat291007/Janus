@@ -1,0 +1,20 @@
+[tasks]
+b8
+
+[options]
+mode prove
+depth 12
+timeout 3000
+
+[engines]
+smtbmc yices
+
+[script]
+read -formal janus_hart.v
+read -formal uart_ind.sv
+prep -top uart_ind
+
+[files]
+janus_hart.v
+uart_ind.sv
+uart_rom.vh

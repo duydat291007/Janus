@@ -969,3 +969,113 @@ Limits, stated plainly:
 Checks: lint is clean, cocotb is 5 of 5 and the replay is 631 of 631. The
 hart and chip planted-bug sets were not rerun, because outside the debug
 outputs the Verilog did not change.
+
+### One protocol proven whole: UART
+
+The proof above covers part of the instruction set for any program, and no
+complete protocol fits inside it. `rtl/uart_ind.sv` is a second unbounded
+proof that goes the other way: it fixes the program and proves all of it, on
+the real Verilog. The program is the one `protocols.uart()` returns.
+`rtl/gen_uart_rom.py` takes its words from the assembler and stops if the
+program has changed shape, so the proof cannot pass on an old copy.
+
+It needs its own proof because `claim` puts the receiver two ticks behind the
+sender on purpose. A receiver leaves `claim` only when it sees the line fall,
+two ticks after the sender drove it, and stays two ticks behind to the end of
+the frame. So the two harts cannot be compared tick for tick. This proof
+compares the receiver with the sender as it was two ticks earlier.
+
+**A bug found on the way.** Writing down what the proof may assume about an
+undriven line exposed a start-up fault in the UART program. A hart sees a pin
+two ticks after it is driven, and the first `claim` ran one tick after the
+`set`. On a push-pull pin that read low before the program started, the
+sender took the old level for a line in use, left the `claim` with an empty
+queue and sent `0xFF`, which the receiver stored. It was reproduced in the
+model and on the chip's Verilog with a pull-down on the pads: hart 1 returned
+`FF A5 3C` for the two bytes sent. Loopback hid it, because an undriven line
+reads high there, and the older pad scenarios hid it because they queue data
+before they start the harts.
+
+One more tick between `set` and `claim` stopped the stray byte but made the
+receiver garble the first frame (`0xE9` for `0xA5`). It had only ever sampled
+the line low, and a `sync` wait needs one sample of the other level before it
+counts a change. The fix kept is one bit time of idle before the first frame,
+`p.step("TX", A, 1, bit, free=True)`, which gives every hart a sample of the
+high line. The program is now 9 instructions. It is loaded at run time, so
+the chip did not change. Costs: the first frame starts one bit time later,
+and for its first half bit time a receiver is not yet waiting for a start
+bit.
+
+Free in the proof, so the result holds for every choice: the bit time, from
+8 to 2047 ticks; the bytes and when they arrive; the address the program is
+loaded at; what the line reads while undriven, on every tick; the three
+unused pins; and the contents of the 55 words outside the program.
+
+What it claims:
+
+- DATA. Every byte the receiver stores is the byte the sender last took from
+  its queue. Takes and stores alternate, so no byte is lost, repeated or
+  invented, and the sender never sends from an empty queue.
+- WIRE. A monitor that sees only the wire, from the tick the sender first
+  drives it, reads standard frames: a start bit low, the eight bits of the
+  byte least significant first, and a stop bit high, each for exactly one bit
+  time. Every start bit follows at least one bit time of high line. So the
+  sender is correct for any receiver that samples inside the bit, not only
+  for a Janus one.
+- CLEAN. Neither hart counts a violation, loses arbitration, clears its queue
+  or stores anything else, and the receiver never drives.
+- LIVE. A hart rests only in boot, between instructions, in the `claim`, or
+  in a bit's edge or mid state, and the last two end within one bit time. The
+  receiver leaves the `claim` exactly two ticks after the start bit begins.
+  The program counter stays inside the program.
+
+It assumes that both harts leave reset on the same tick with no traps,
+prescaler or adversary fault set, and that a queue entry stays until the hart
+takes it.
+
+It is not vacuous:
+
+- 34 planted bugs each break it: 7 in the program (one takes the idle bit
+  out again), 23 in the hart, 2 in the monitor's own idea of a frame, and 2
+  that weaken its assumptions (a queue entry may vanish; bit times down to 4
+  ticks). Two more survive, as expected. One is `sync` checking only the
+  level, as in the other proof. The other loads the program past the end of
+  memory: addresses wrap, so it still works, and the assembler refuses such
+  a placement anyway.
+- `rtl/sim_uart.sh` simulates the same harness, with every assertion and the
+  monitor, on random inputs: 24 runs at bit times from 8 to 2047, 1,748
+  frames over 5.3 million ticks, 14 runs starting with the line low, and a
+  separate scoreboard for the bytes. No failure. The same simulation fails
+  with the idle bit taken out and on a planted hart bug.
+
+Limits, stated plainly:
+
+- A sender and a receiver. A witness runs the receiver's path but is not in
+  the proof.
+- Both harts start together. A receiver that starts later or in the middle of
+  a frame is not covered.
+- One clock. The proof says nothing about a far end with its own clock; the
+  model tests cover a sender 3% fast or slow.
+- Bit times from 8 ticks. Shorter ones are not claimed.
+- The queues, pin rotation and host port are outside it; the chip scenarios
+  test those.
+- Reachability comes from the simulation. A bounded search to the depth of
+  one frame was too slow, at about 13 seconds a step.
+- The other five protocols are not proven whole.
+
+Checks on this version:
+
+- Model: 84 tests (37, 8, 16, 17 and 6) and 35 of 35 planted bugs. The new
+  tests start a sender and a receiver on a line that reads low or high, with
+  the queue filled early or late.
+- The Verilog replays 643 recorded harts tick for tick, and again with the
+  prescaler at 3 and 7.
+- Chip scenarios are 67 of 67 with 904 byte checks. The new one starts on
+  pads with a pull-down and an empty queue; it fails on the old program.
+  cocotb is 5 of 5.
+- Planted bugs: 41 of 41 in the hart, 23 of 23 in the chip, and 29 in the
+  subset proof plus its expected survivor.
+- The subset proof passes at `dwell` 4 and fails at 3 as before, with all
+  13 covers reached.
+- Synthesis is the same to the cell (317,478 um2, 24,057 cells): only a
+  debug output for the proof was added to the hart.
