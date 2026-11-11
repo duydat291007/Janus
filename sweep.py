@@ -1,6 +1,6 @@
 """Random-data stress and maximum-speed measurement for SPI and I2C.
 
-Speeds assume a 50 MHz core clock, which is an assumption, not a measured limit.
+Speeds are for the chip's 25 MHz clock, with one tick per clock.
 """
 import random
 
@@ -9,7 +9,7 @@ from janus import RESTART, Bus, Hart
 from protocols import C, T, i2c, spi
 
 MODES = [(0, 0), (0, 1), (1, 0), (1, 1)]
-CLOCK_MHZ = 50
+CLOCK_MHZ = 25
 SEEDS = 40
 
 

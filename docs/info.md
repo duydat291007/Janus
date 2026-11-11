@@ -17,7 +17,7 @@ connect it to a shared CAN bus.
 
 There is also a program for the packet layer of low-speed USB: one OUT
 transaction of a token, a data packet and a handshake, with NRZI, bit stuffing,
-the D+/D- pair, a CRC16 check and the end of packet done on the chip. It needs
+the D+/D- pair, the CRC16 and the end of packet done on the chip. It needs
 a 24 MHz clock, which gives 16 ticks per bit at 1.5 Mbit/s; at 25 MHz the bit
 rate is 4% high, outside the USB tolerance. It has been checked in simulation
 only. It does not filter by address, enumerate, or handle IN transfers, and the
@@ -35,7 +35,7 @@ Each frame is selected by its first byte, and `h` is the hart number:
 | `30 ctrl` | Bit 0 runs hart 0, bit 1 runs hart 1, bit 2 selects loopback |
 | `4h ctl data` | Push a transmit entry: ctl 0 data, 1 STOP, 2 RESTART |
 | `5h xx xx ...` | Read received bytes; each dummy byte returns one |
-| `6h xx xx` | Read the violation count, then the status flags |
+| `6h xx xx` | Read the violation count (it stops at 255), then the status flags |
 
 Status flags, from bit 5 down: receive overflow, arbitration lost, transmit full,
 transmit empty, receive full, receive empty.

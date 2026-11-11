@@ -29,16 +29,20 @@ peripheral, or a witness that checks the traffic without driving anything.
 
 ## Status
 
-The design passed the full Tiny Tapeout flow, precheck and gate-level test
-before the adversary was added; that version has not been through the flow yet.
-Everything below was checked in simulation or by formal proof.
+The version with the adversary passed the full Tiny Tapeout flow: layout,
+precheck and gate-level test. The changes after it (the chip sending USB's
+CRC16, and the fixes listed under "Review" in `KILL_TEST.md`) have not been
+through the flow yet. Everything below was checked in simulation or by formal
+proof.
 
 - UART, SPI, I2C, 1-Wire and CAN base frames run end to end through the host port,
   and 1-Wire also at real 1 us timing using the prescaler.
 - The Verilog matches the Python model tick for tick, and clock for clock with
   the prescaler set.
 - An unbounded proof covers timed bits, `sync`, stuffing and CRC on the real
-  Verilog, for every program in that subset. It does not yet cover clocked bits,
+  Verilog, for every program in that subset: the two harts stay in step, the
+  listener reads what the owner sent, and neither counts a violation the other
+  does not. It does not yet cover clocked bits,
   traps, `claim`, `choice`, `match`, arbitration, resync or witnesses, so no
   complete protocol is fully proven.
 - CAN has no error frames or automatic retransmission, so it must not be used on
@@ -46,7 +50,10 @@ Everything below was checked in simulation or by formal proof.
 - Low-speed USB was a hold-out test. It failed on the frozen instruction set and
   passes after four general additions: a complementary pin pair, NRZI, stuffing
   of ones only, and a CRC start value and residual. The program covers one OUT
-  transaction at the packet layer and needs a 24 MHz clock. It has no address
+  transaction at the packet layer and needs a 24 MHz clock. The chip computes,
+  sends and checks the data packet's CRC16; the token's CRC5 comes from the
+  host and is not checked. The program is at both limits set for it: 48
+  instructions and 3 role-dependent ones. It has no address
   filter, no IN transfers and no enumeration, and it has run in simulation only.
   The record is in `KILL_TEST.md`.
 - Any hart can be an adversary that sends one chosen bit wrong. Sweeping that
@@ -81,3 +88,6 @@ bash chip.sh synth
 
 The cocotb tests run from `test/` with `make`, and drive the chip through the
 same host driver a microcontroller uses.
+
+GitHub runs the model tests, the replay and the chip scenarios on every push
+(`.github/workflows/verify.yaml`), next to the Tiny Tapeout build.

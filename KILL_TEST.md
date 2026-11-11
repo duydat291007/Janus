@@ -806,10 +806,117 @@ six of them in the new logic (one older bug retargeted to a changed line),
 passes at `dwell` 4 and fails at 3 as before; its subset excludes the
 adversary, and it now covers the coder following the owner's intended bit.
 Cost: 54 flops and 1.5% area (308,867 to 313,360 um2 synthesized); the
-estimated critical path goes from 6.5 to 6.8 ns. This version has not been
-through the Tiny Tapeout flow yet.
+estimated critical path goes from 6.5 to 6.8 ns. This version then passed the
+Tiny Tapeout flow: layout, precheck and the gate-level test. The build's
+viewer page failed to publish, on a missing GitHub Pages artifact; that step
+does not involve the design.
 
 Limits: one fault per run, in timed bits only. The fault is a wrong level
 for a whole bit; it cannot shift an edge, shorten a bit or add a glitch. The
 recovery checks queue the next frame after the bus is idle; bytes left in a
 queue by a cut-off frame are sent as bogus frames first, and are flagged.
+
+## Review: everything read again
+
+After the adversary, the model, the Verilog, the tests and the scripts were
+read again line by line. No test was failing. Found and fixed:
+
+1. The violation counter wrapped. It is 8 bits in the chip, and the 256th
+   violation took it back to 0: the "violation seen" pin went low and a host
+   read a clean count from a very bad run. A witness left watching a noisy
+   bus would get there. It now stops at 255, in the Verilog and in the model.
+   No test had counted that far. `test_violation_count_stops_at_255` does,
+   and the replay holds the Verilog to it.
+2. A queue could lose a byte without saying so. A full queue refused a push
+   even in a tick that popped an entry, while the overflow flag assumed the
+   pop had made room. A byte arriving in the same tick as a host read of a
+   full receive queue was dropped with the flag clear. A full queue now takes
+   a push in a tick that pops. The chip scenarios cannot place two events on
+   one tick, so the queue has its own testbench against a plain list
+   (`rtl/tb_fifo.v`, run by `chip.sh test`): 20,000 random ticks, 1,987 of
+   them a push into a full queue with a pop. The old queue fails it.
+3. The assembler encoded out-of-range values silently. A third edge trap
+   overwrote a hold trap's word, and a constant too wide for its field ran
+   into its neighbour. No shipped program did either. It now refuses.
+
+Removed: a flop per hart that always held the opposite of another (`saved`
+and `stuff_bit`); two scripts whose patterns no longer matched the source
+(`rtl/variants.sh`, `rtl/area.sh`); the early instruction-width estimator
+`isa_report.py`, superseded by the real encoder and wrong for six programs;
+dead decoding code in `rtl/cex.py`; an unused import. `sweep.py` reported
+speeds for a 50 MHz clock, as did the CAN stress run; both now use the chip's
+25 MHz.
+
+Removing the flop showed a weakness in the proof. Its planted bug "stuff bit
+wrong polarity" had been caught only through that flop. With the flop gone
+the two harts agreed with each other on the wrong polarity, and the proof
+passed. The proof now states the property itself: a stuff bit is the opposite
+of the run it follows. The replay had caught this bug all along.
+
+The proof also gained a claim: both harts hold the same violation count at
+every tick, so a listener never flags what a conforming owner sent. A new
+planted bug, a listener that flags a good constant bit, breaks it.
+
+Added: a cocotb test of the USB transaction below, which the Tiny Tapeout
+flow also runs on the gate-level netlist; a GitHub workflow that runs the
+model tests, the replay and the chip scenarios on every push; and the replay
+and chip scripts now exit with an error when anything fails.
+
+### The chip sends the CRC16
+
+The stage 2 limit "the host supplies the CRC5 and CRC16 bytes" is half
+removed. The chip now computes and sends the data packet's CRC16. The token's
+CRC5 still comes from the host and is still not checked.
+
+One generic addition, mode field 17, `xor`: bit k of the pattern is XORed
+onto bit k of a CRC-source `bits` as it is sent. USB sends its CRC inverted,
+and a plain invert flag would be wrong: a sender's CRC register follows the
+bits it sends, so an inverted bit feeds back and changes the bits after it.
+The assembler works out the pattern whose net effect on the wire is the
+inversion (`crc_send_mask`; 0x9555 for USB's CRC16). The sender's register
+then ends at the same residual, 0x800D, as every listener's, so the shared
+`crc_bad` check needs no exception for the sender.
+
+The host queues the PID and the data, then RESTART where it used to queue two
+CRC bytes and STOP. The old form still works, and the 14 stage 2 cases are
+unchanged and pass. The program is now 48 instructions with 3 role-dependent
+ones: the new `choice` on RESTART is the third, and reordering the program's
+tail saved one instruction. That is exactly at both limits of the kill test.
+Nothing more fits.
+
+Three new cases (`python test_usb.py`, 17 in all):
+
+- The reference device and the independent decoder accept the chip's CRC16.
+- Over 300 random payloads of 0 to 8 bytes, the device receives the same two
+  CRC bytes the reference computes.
+- The line is only ever J, K or SE0, and no bit edge is late.
+
+The adversary sweep was repeated with the chip sending the CRC: the same 139
+positions, the same 31 unnoticed in the token and the PIDs, and every fault
+in the data and CRC16 flagged. A wrong data bit does not reach the CRC the
+chip sends, because the coder follows the bit the owner meant to send. Both
+planted bugs in the new path are caught, 14 of 14 in all
+(`python test_usb.py mutants`).
+
+A full 8-byte transaction is now 14 queue entries, not 16.
+
+### Checks after the review
+
+- Model: 80 tests (33, 8, 16, 17 and 6), and 34 of 34 planted bugs across
+  the five model sets.
+- The Verilog replays 631 recorded harts tick for tick, and again with the
+  prescaler at 3 and 7.
+- Chip scenarios are 66 of 66 with 895 byte checks, four of them the
+  transaction with the chip's CRC16. cocotb is 5 of 5.
+- Planted bugs: 41 of 41 in the hart (three new: the counter wrapping, and
+  two in the CRC send pattern), 23 of 23 in the chip (three new, in the
+  queue), and 17 proof bugs plus the expected survivor.
+- The proof passes at `dwell` 4 and fails at 3 as before, and all eight
+  covers are reached.
+
+Two planted-bug patterns had gone stale with these edits and reported that
+they did not apply. Both were retargeted and are caught.
+
+Cost: 32 flops and 1.3% area (313,360 to 317,478 um2 synthesized); the
+estimated critical path goes from 6.8 to 7.0 ns. This version has not been
+through the Tiny Tapeout flow yet.

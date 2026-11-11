@@ -1,0 +1,33 @@
+name: verify
+# The project's own checks, on every push: the model against its reference
+# devices, then the Verilog against the model.
+on: [push, workflow_dispatch]
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Model tests against independent reference devices
+        run: |
+          python test_janus.py
+          python test_onewire.py
+          python test_can.py
+          python test_usb.py
+          python test_adversary.py
+          python check_sync.py
+
+      - name: Install iverilog
+        run: sudo apt-get update && sudo apt-get install -y iverilog
+
+      - name: Replay every recorded hart on the Verilog, tick for tick
+        run: cd rtl && bash run.sh replay
+
+      - name: Chip scenarios through the host port
+        run: cd rtl && bash chip.sh test

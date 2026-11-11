@@ -298,7 +298,7 @@ def run_stress():
         rng = random.Random(bit)
         problems = [p for p in (stress_once(rng) for _ in range(120)) if p]
         results[bit] = problems
-        print(f"bit={bit:3} ticks ({50 / bit:.2f} Mbit/s at 50 MHz): "
+        print(f"bit={bit:3} ticks ({25 / bit:.2f} Mbit/s at 25 MHz): "
               f"{120 - len(problems)}/120 clean", flush=True)
         if problems:
             print("    first:", str(problems[0])[:120])

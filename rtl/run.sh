@@ -22,6 +22,7 @@ if [ "${1:-all}" != "synth" ]; then
         esac
     done
     echo "replay: $pass passed, $fail failed"
+    [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ] || exit 1
 fi
 
 if [ "${1:-all}" != "replay" ]; then

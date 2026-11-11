@@ -4,30 +4,6 @@ import sys
 
 WANT = ["pc_a", "pc_b", "s_a", "s_b", "ins", "now_a", "edge_a", "edge_b", "oe_a", "oe_b", "ov_a", "ov_b", "pin_a", "s1_a", "armed_a", "armed_b", "low", "rx_a", "rx_b", "last_a", "last_b"]
 COLS = WANT[:17] + ["rx_a", "rx_b", "last_a", "last_b"]
-OPS = {0: "set", 1: "bits", 2: "claim", 3: "load", 4: "store", 5: "branch", 6: "choice",
-       7: "match", 8: "counter", 9: "mode"}
-CONDS = ["always", "last0", "last1", "count0", "loop", "crc_bad"]
-SRC = ["tx", "crc", "0", "1"]
-
-
-def show(word):
-    op = word >> 28
-    name = OPS.get(op, f"op{op}")
-    if op == 1:
-        return (f"bits owner={(word >> 23) & 3} src={SRC[(word >> 21) & 3]} "
-                f"n={((word >> 17) & 15) + 1} sync={(word >> 16) & 1} dwell={word & 2047}")
-    if op == 3:
-        imm = (word >> 25) & 1
-        return f"load party={(word >> 26) & 3} " + (f"imm={word & 255:#x}" if imm else "queue")
-    if op == 4:
-        return f"store party={(word >> 26) & 3}"
-    if op == 5:
-        return f"branch {CONDS[(word >> 25) & 7]} -> {word & 63}"
-    if op == 8:
-        if (word >> 27) & 1:
-            return f"counter rx mask={(word >> 8) & 255:#x} cap={(word >> 16) & 255}"
-        return f"counter n={word & 255}"
-    return name
 
 
 def parse(path):

@@ -15,6 +15,7 @@ The behaviour described here is what `janus.py` models and what the Verilog in
 | Program memory | 64 words of 32 bits, shared by both harts. Jump targets are absolute addresses. |
 | Pins | A hart uses up to 4 of the chip's 8 protocol pins, chosen by a pin rotation register. Each pin is open drain or push-pull, set by the host. |
 | Queues | Per hart: a 16-entry transmit queue (data, STOP or RESTART) and a 16-entry receive queue. |
+| Violations | Per hart: an 8-bit count of protocol violations. It stops at 255 and is cleared when the hart is stopped. |
 | Tick | The hart's unit of time. One clock, or `div + 1` clocks with the prescaler set. All dwell times are in ticks. |
 | Role | 0 (A, C or S), 1 (B, T or R), or 3 (witness). Set by the host; some instructions may change it while a program runs. |
 
@@ -95,7 +96,8 @@ If the owner is mine, apply it. Takes one tick.
 | 10:0 | dwell, in ticks (timed: bit time; clocked: half period) |
 
 - **Owner:** drives each bit. From the transmit byte (shifted by `msb`), the
-  CRC, or a constant.
+  CRC, or a constant. A CRC bit is the top bit of the CRC register; bit k of
+  the instruction is XORed with bit k of `xor`.
 - **Listener:** samples each bit at mid-bit into the receive shift register.
   A constant that does not match counts a violation, unless `free`.
 - **Coder:** with stuffing enabled in `mode`, bits run through a run-length
@@ -236,6 +238,15 @@ field.
 | 14 | `nrzi` | bit 0: timed bits are NRZI coded |
 | 15 | `resid` | the CRC value that `crc_bad` accepts |
 | 16 | `on_break` | bit 6 enable, bits 5:0: address a listener jumps to on a break |
+| 17 | `xor` | bit k is XORed onto bit k of a `bits` with source CRC, as it is sent |
+
+Some protocols send the CRC changed by a fixed pattern; USB sends it inverted.
+`xor` does that. A sender's CRC register follows every bit it sends, CRC bits
+included, so it stays equal to a listener's, and a changed bit feeds back into
+the bits after it. The pattern that puts `crc ^ xorout` on the wire is
+therefore not `xorout` itself. `crc_send_mask(poly, width, xorout)` in
+`janus.py` works it out: for USB's CRC16 it is 0x9555, and the register then
+ends at the residual 0x800D in sender and listener alike.
 
 ## Traps
 
