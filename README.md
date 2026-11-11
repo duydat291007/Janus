@@ -29,20 +29,20 @@ peripheral, or a witness that checks the traffic without driving anything.
 
 ## Status
 
-The version with the adversary passed the full Tiny Tapeout flow: layout,
-precheck and gate-level test. The changes after it (the chip sending USB's
-CRC16, and the fixes listed under "Review" in `KILL_TEST.md`) have not been
-through the flow yet. Everything below was checked in simulation or by formal
+The design passed the full Tiny Tapeout flow: layout, precheck and gate-level
+test. Later commits changed only the proof, its tools and the documents, not
+the chip's logic. Everything below was checked in simulation or by formal
 proof.
 
 - UART, SPI, I2C, 1-Wire and CAN base frames run end to end through the host port,
   and 1-Wire also at real 1 us timing using the prescaler.
 - The Verilog matches the Python model tick for tick, and clock for clock with
   the prescaler set.
-- An unbounded proof covers timed bits, `sync`, stuffing and CRC on the real
-  Verilog, for every program in that subset: the two harts stay in step, the
-  listener reads what the owner sent, and neither counts a violation the other
-  does not. It does not yet cover clocked bits,
+- An unbounded proof covers timed bits, `sync`, stuffing, CRC, NRZI, the pin
+  pair and break bits on the real Verilog, for every program in that subset:
+  the two harts stay in step, the listener reads what the owner sent, and
+  neither counts a violation the other does not. It does not yet cover the
+  jump on a break, `set`, clocked bits,
   traps, `claim`, `choice`, `match`, arbitration, resync or witnesses, so no
   complete protocol is fully proven.
 - CAN has no error frames or automatic retransmission, so it must not be used on

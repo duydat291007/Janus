@@ -55,7 +55,7 @@ module janus_hart (
     output     [7:0]  dbg_pin,
     output     [7:0]  dbg_s1,
     output     [7:0]  dbg_armed,
-    output     [49:0] dbg_code,
+    output     [87:0] dbg_code,
     output            dbg_inserted,
     output            dbg_stuff_bit,
     output     [4:0]  dbg_width,
@@ -153,7 +153,8 @@ module janus_hart (
     assign dbg_pin = {4'hF, pin};
     assign dbg_s1 = {4'hF, s1};
     assign dbg_armed = {4'hF, armed};
-    assign dbg_code = {c_stuff, c_poly, c_width, c_msb, crc, run_len, run_valid,
+    assign dbg_code = {c_pair_en, c_pair, c_nrzi, c_xor, c_resid, c_init1, c_ones,
+                       c_stuff, c_poly, c_width, c_msb, crc, run_len, run_valid,
                        run_valid & run_val, inserted, inserted & stuff_bit};
     assign dbg_inserted = inserted;
     assign dbg_stuff_bit = stuff_bit;
@@ -163,8 +164,7 @@ module janus_hart (
     assign dbg_clean = !c_rs_en && !lf_valid && c_lose == WITNESS
         && !c_l2_en && c_div == 0 && div_cnt == 0
         && !cfg0[15] && !cfg1[15] && !cfg2[15] && !cfg3[15]
-        && !c_ones && !c_init1 && !c_pair_en && !c_nrzi && !c_brk_en && c_resid == 0
-        && c_xor == 0
+        && !c_brk_en
         && !cfg6[15] && !f_armed && !faulty;
 `endif
 

@@ -918,5 +918,54 @@ Two planted-bug patterns had gone stale with these edits and reported that
 they did not apply. Both were retargeted and are caught.
 
 Cost: 32 flops and 1.3% area (313,360 to 317,478 um2 synthesized); the
-estimated critical path goes from 6.8 to 7.0 ns. This version has not been
-through the Tiny Tapeout flow yet.
+estimated critical path goes from 6.8 to 7.0 ns. This version then passed the
+Tiny Tapeout flow: layout, precheck, the gate-level test and the viewer. The
+new verify workflow passed on its first run.
+
+### The proof reaches the USB line code
+
+The unbounded proof used to stop at what CAN needs. Its subset now also
+allows ones-only stuffing, the CRC start value, residual and send pattern,
+NRZI, a complementary pair on a second pin, and break bits. It runs on the
+real Verilog. Only the hart's debug outputs changed, and the synthesized chip
+is the same to the cell (317,478 um2, 24,057 cells).
+
+What it now claims as well, for every program in the subset:
+
+- Under NRZI the listener decodes exactly the bit the owner meant, from the
+  change of level.
+- With a pair, the second pin carries the complement at every sample point,
+  and both pins are low in a break.
+- The two harts hold the same violation count, so a listener never flags a
+  conforming owner's break.
+- Both keep the same CRC, run length and configuration, the new CRC settings
+  included.
+
+It closed after three additions to the harness. Under NRZI the sync rule
+becomes "a sync bit is a 0", because only a change of level can be waited
+for. Both harts hold the same sampled levels all through a bit. A break
+never carries a stuff bit. `check_sync.py` now checks the first of these on
+the USB program: its 2 sync bits each send a 0.
+
+It is not vacuous. 11 new planted bugs, at least one in each new feature, all
+break the proof, and so does removing the NRZI sync rule: 29 in all, plus
+the one expected survivor. All 13 covers are reached, 5 of them new.
+
+Limits, stated plainly:
+
+- The jump a listener takes on a break (`on_break`) is outside the subset. It
+  makes the two harts' control flow differ on purpose, which a lockstep proof
+  cannot follow. `claim`, `choice`, `set` and traps are outside too. So the
+  USB program itself is still not proven, only the line code it is built
+  from.
+- A program may turn the pair on but not off again, and the pair is fixed to
+  pin 1.
+- Under NRZI the proof relies on the line not moving between a listener's
+  last sample and a sync bit. That holds inside the subset, which has no
+  `set`. The USB program releases its lines with `set`, and `check_sync.py`
+  does not check this half of the rule.
+- The smallest bit time is still 4 ticks.
+
+Checks: lint is clean, cocotb is 5 of 5 and the replay is 631 of 631. The
+hart and chip planted-bug sets were not rerun, because outside the debug
+outputs the Verilog did not change.

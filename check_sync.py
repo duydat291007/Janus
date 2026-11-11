@@ -8,6 +8,11 @@ Pins start high (idle, pull-ups). Entry through a trap fixes the pin levels the
 trap's condition implies. `claim` changes nothing, because a sync compares
 against the level recorded at the last sample, not the current one.
 
+Under NRZI a listener waits for a change away from the level it last sampled,
+so the rule has two halves. This checks the first: a sync bit must send a 0,
+because only a 0 changes the level. It does not check the second, that the
+line has not moved since the listener last sampled it.
+
 Run: python check_sync.py
 """
 import protocols as p
@@ -87,8 +92,13 @@ def analyse(prog):
     return states
 
 
+def uses_nrzi(prog):
+    return any(i.op == "mode" and i.args.get("nrzi") for i in prog.code)
+
+
 def problems(prog):
     states = analyse(prog)
+    nrzi = uses_nrzi(prog)
     found = []
     for at, ins in enumerate(prog.code):
         if ins.op != "bits" or not ins.args["sync"]:
@@ -98,6 +108,9 @@ def problems(prog):
             found.append((at, pin, val, "unreachable"))
         elif ins.args["n"] != 1:
             found.append((at, pin, val, "a sync bit must be a single bit"))
+        elif nrzi:
+            if val != 0:
+                found.append((at, pin, val, "under NRZI a sync bit must send a 0"))
         elif states[at][pin] != 1 - val:
             found.append((at, pin, val, f"line is {states[at][pin]} on entry"))
     return found
@@ -105,12 +118,13 @@ def problems(prog):
 
 def main():
     total, syncs = 0, 0
-    for prog in (p.uart(50), p.spi(10), p.i2c(20), p.onewire(), p.can(50)):
+    for prog in (p.uart(50), p.spi(10), p.i2c(20), p.onewire(), p.can(50), p.usb(16)):
         count = sum(i.op == "bits" and i.args["sync"] for i in prog.code)
         bad = problems(prog)
         total += len(bad)
         syncs += count
-        print(f"{prog.name}: {count} sync bits, {len(bad)} outside the rule")
+        note = " (NRZI: checked only that each sends a 0)" if uses_nrzi(prog) else ""
+        print(f"{prog.name}: {count} sync bits, {len(bad)} outside the rule{note}")
         for at, pin, val, why in bad:
             print(f"   word {at}: {pin} waits for {val}: {why}")
     print(f"total: {syncs} sync bits, {total} outside the rule")

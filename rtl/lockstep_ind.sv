@@ -4,20 +4,30 @@
 // real memory. Induction does not unroll from reset, so if it closes, the claim
 // holds at every tick of every run of every allowed program.
 //
-// Subset: timed bits including sync, on one pin, with run-length stuffing and
+// Subset: timed bits including sync, on one wire, with run-length stuffing and
 // CRC, plus load, store, branch, counter, and mode writes to bit order,
-// stuffing, polynomial and CRC width. The pair, NRZI, ones-only stuffing, CRC
-// start value and residual, and break bits are outside the subset. The assumption `sync_line_ok` is the sync rule that check_sync.py
-// verifies statically: the line is at the opposite level when a sync bit starts.
+// stuffing (of both values or of ones only), polynomial, CRC width and start
+// value, residual and CRC send pattern, NRZI, a complementary pair on pin 1,
+// and break bits. A program may turn the pair on but not off again. The jump
+// on a break, clocked bits, traps, claim, choice, match, set, arbitration and
+// resync are outside the subset.
+//
+// The assumption `sync_line_ok` is the sync rule: the line is at the opposite
+// level when a sync bit starts, which check_sync.py verifies statically.
+// Under NRZI the rule is that a sync bit is a 0, because only a change of
+// level can be waited for.
 //
 // Claims:
 //   DATA:  at every sample point the wire carries the owner's bit, so what the
-//          listener reads is what the owner sent.
+//          listener reads is what the owner sent. Under NRZI the listener
+//          decodes the owner's bit from the change of level. With a pair, the
+//          second pin carries the complement, and both are low in a break.
 //   AGREE: both harts hold the same pc, last, counter, received bits, violation
 //          count, time and pins at every tick, and the same control state and
-//          bit edge at every
-//          tick outside the short window while a listener waits on a sync bit.
-//          Coder state (CRC, run length, configuration) is identical too.
+//          bit edge at every tick outside the short window while a listener
+//          waits on a sync bit. Coder state (CRC, run length, configuration)
+//          is identical too. So a listener never flags what the owner sent,
+//          a break included.
 //   LIVE:  a hart is only in S_EDGE, S_MID or S_SYNC between instructions, so
 //          a conforming pair never takes the false stuff-error exit. Edge
 //          and mid end on a time comparison with the distance bounded, and a
@@ -35,14 +45,16 @@ module lockstep_ind (input clk);
             case (op)
                 4'd1: wf = i[27:25] == 0 && i[24:23] < 2
                         && (!i[16] || (i[22] && i[20:17] == 0))
-                        && !i[15] && !i[13] && i[10:0] >= D;
+                        && !i[15] && !(i[13] && i[16]) && i[10:0] >= D;
                 4'd3: wf = i[27:26] < 2;
                 4'd4: wf = i[27:26] <= 2 && !i[25];
                 4'd5: wf = i[27:25] <= 5;
                 4'd8: wf = 1'b1;
-                4'd9: wf = i[27:23] == 0 || i[27:23] == 3
-                        || (i[27:23] == 2 && i[3:0] != 1 && !i[4])
-                        || (i[27:23] == 4 && i[4:0] >= 1 && i[4:0] <= 16 && !i[5]);
+                4'd9: wf = i[27:23] == 0 || i[27:23] == 3 || i[27:23] == 14
+                        || (i[27:23] == 13 && i[3:0] == 4'b1001)
+                        || i[27:23] == 15 || i[27:23] == 17
+                        || (i[27:23] == 2 && i[3:0] != 1)
+                        || (i[27:23] == 4 && i[4:0] >= 1 && i[4:0] <= 16);
                 default: wf = 1'b0;
             endcase
         end
@@ -55,7 +67,7 @@ module lockstep_ind (input clk);
 
     wire [7:0]  oe_a, ov_a, oe_b, ov_b, count_a, count_b, rx_a, rx_b, pin_a, pin_b, s1_a, s1_b;
     wire [7:0]  armed_a, armed_b;
-    wire [49:0] code_a, code_b;
+    wire [87:0] code_a, code_b;
     wire [7:0]  viol_a, viol_b;
     wire [4:0]  width_a, width_b;
     wire        stuffed_a, stuffed_b, stuff_bit_a, stuff_bit_b;
@@ -67,7 +79,8 @@ module lockstep_ind (input clk);
     wire [1:0]  role_a, role_b, src_a, src_b;
     wire        last_a, last_b, mine_a, mine_b, val_a, val_b, clean_a, clean_b;
     wire        low = (oe_a[0] && !ov_a[0]) || (oe_b[0] && !ov_b[0]);
-    wire [7:0]  bus = {7'h7F, !low};
+    wire        low1 = (oe_a[1] && !ov_a[1]) || (oe_b[1] && !ov_b[1]);
+    wire [7:0]  bus = {6'h3F, !low1, !low};
 
     janus_hart a (.clk(clk), .por(por), .rst(rst), .wire_in(bus), .oe(oe_a), .ov(ov_a),
         .od_mask(8'h01), .base_role(2'd0), .reset_pc(6'd0), .addr_reg(8'd0), .pc(pc_a), .ins(ins),
@@ -114,11 +127,18 @@ module lockstep_ind (input clk);
     wire        ov_o = owner_a ? ov_a[0] : ov_b[0];
     wire        oe_l = owner_a ? oe_b[0] : oe_a[0];
     wire [7:0]  armed_l = owner_a ? armed_b : armed_a;
+    wire [7:0]  armed_o = owner_a ? armed_a : armed_b;
+    wire        nrzi = code_a[84];
+    wire        pair = code_a[87];
+    wire        brk = ins[13];
+    wire        oe_o1 = owner_a ? oe_a[1] : oe_b[1];
+    wire        ov_o1 = owner_a ? ov_a[1] : ov_b[1];
+    wire        oe_l1 = owner_a ? oe_b[1] : oe_a[1];
 
     wire        waiting = s_a == S_SYNC || s_b == S_SYNC;
     wire        in_bit = waiting || s_a == S_EDGE || s_a == S_MID
                          || s_b == S_EDGE || s_b == S_MID;
-    wire [1:0]  src_expected = stuffed_a ? {1'b1, stuff_bit_a} : ins[22:21];
+    wire [1:0]  src_expected = stuffed_a ? {1'b1, stuff_bit_a} : brk ? 2'd2 : ins[22:21];
     wire [11:0] next_now = now_a + 1'b1;
     wire [11:0] since = now_a - edge_o;
     wire [11:0] to_edge = edge_o - now_a;
@@ -140,10 +160,11 @@ module lockstep_ind (input clk);
     end
 
     wire exec_sync = !rst && s_a == S_EXEC && s_b == S_EXEC && is_sync;
-    wire sync_line_ok = bus[0] != want;
+    // Under NRZI only a change of level can be waited for, so a sync bit is a 0.
+    wire sync_line_ok = nrzi ? !want : bus[0] != want;
     // Coder rule: stuffing and CRC bits need a CRC width set beforehand.
     wire uses_coder = (is_bits && ins[22:21] == 2'd1)
-                      || (ins[31:28] == 4'd9 && ins[27:23] == 5'd2 && ins[3:0] != 0);
+                      || (ins[31:28] == 4'd9 && ins[27:23] == 5'd2 && ins[4:0] != 0);
 
     always @* begin
         assume (wf(ins));
@@ -181,13 +202,21 @@ module lockstep_ind (input clk);
             end
 
             // DATA
-            if (sampling) assert (s1_a[0] == val_o);
+            // Under NRZI the listener reads a 1 when the level is the one it
+            // sampled a bit earlier.
+            if (sampling) assert (((nrzi && !brk) ? s1_a[0] == armed_l[0] : s1_a[0]) == val_o);
+            // The pair carries the complement, and a break is both pins low.
+            if (sampling && pair) assert (s1_a[1] == (brk ? 1'b0 : !s1_a[0]));
 
             // LIVE: only these states exist
             assert (s_a == S_BOOT || s_a == S_EXEC || s_a == S_SYNC || s_a == S_EDGE || s_a == S_MID);
             assert (s_b == S_BOOT || s_b == S_EXEC || s_b == S_SYNC || s_b == S_EDGE || s_b == S_MID);
 
             // Supporting invariants
+            assert (!pair || code_a[86:85] == 2'd1);
+            assert (pair || (!oe_a[1] && !oe_b[1]));
+            assert (!(oe_a[1] && oe_b[1]));
+            assert (!(oe_a[1] && !oe_a[0]) && !(oe_b[1] && !oe_b[0]));
             assert (role_a == 2'd0 && role_b == 2'd1);
             assert (back_a[11] ? (ahead_a <= 12'd2047) : (back_a <= 12'd2047));
             assert (back_b[11] ? (ahead_b <= 12'd2047) : (back_b <= 12'd2047));
@@ -205,6 +234,8 @@ module lockstep_ind (input clk);
                 assert (dwell_a == ins[10:0]);
                 assert (src_a == src_expected && src_b == src_expected);
                 assert (mine_a == owner_a && mine_b == !owner_a);
+                assert (armed_a == armed_b);
+                assert (!(brk && stuffed_a));   // a break bypasses the stuffer
                 if (src_expected[1]) assert (val_o == src_expected[0]);
                 // A stuff bit is the opposite of the run it follows.
                 if (stuffed_a) assert (stuff_bit_a == stuff_bit_b && code_a[3]
@@ -215,11 +246,18 @@ module lockstep_ind (input clk);
                     assert (armed_a == pin_a && armed_b == pin_a);
                 end
                 if (s_o == S_MID) begin
-                    assert (oe_o && ov_o == val_o);
-                    assert (!oe_l);
+                    // The level driven: the bit, or under NRZI a change from
+                    // the level before the bit for a 0 and none for a 1.
+                    assert (oe_o && ov_o == ((nrzi && !brk) ? armed_o[0] ^ !val_o : val_o));
+                    assert (!oe_l && !oe_l1);
+                    if (pair) begin
+                        assert (oe_o1 && ov_o1 == (brk ? 1'b0 : !ov_o));
+                        if (since >= 12'd1) assert (s1_a[1] == ov_o1);
+                        if (since >= 12'd2) assert (pin_a[1] == ov_o1);
+                    end
                     assert (!since[11] && since <= (dwell_a >> 1));
-                    if (since >= 12'd1) assert (s1_a[0] == val_o);
-                    if (since >= 12'd2) assert (pin_a[0] == val_o);
+                    if (since >= 12'd1) assert (s1_a[0] == ov_o);
+                    if (since >= 12'd2) assert (pin_a[0] == ov_o);
                 end
             end
 
@@ -229,10 +267,10 @@ module lockstep_ind (input clk);
                 assert (s_l == S_SYNC);
                 assert (s_o == S_EDGE || s_o == S_MID);
                 assert (!stuffed_a);
-                assert (val_l == want);
-                assert (armed_l[0] != want);
+                assert (nrzi ? !want : val_l == want);
+                assert (armed_l[0] != val_l);
                 assert (!oe_l || edge_l == edge_o);
-                if (s_o == S_EDGE) assert (pin_a[0] != want);
+                if (s_o == S_EDGE) assert (pin_a[0] != val_l);
                 if (s_o == S_MID) assert (!since[11] && since <= 12'd1);
             end
 
@@ -242,6 +280,11 @@ module lockstep_ind (input clk);
             cover (sampling && stuffed_a && !val_o);
             cover (sampling && ins[22:21] == 2'd1 && val_o);
             cover (sampling && is_sync && !want);
+            cover (sampling && nrzi && is_sync);
+            cover (sampling && pair && brk);
+            cover (sampling && pair && nrzi && !brk && !val_o);
+            cover (sampling && nrzi && !val_o && ins[22:21] == 2'd0);
+            cover (sampling && nrzi && val_o && ins[22:21] == 2'd0);
             cover (sampling && owner_a && !val_o && ins[22:21] == 2'd0);
             cover (sampling && !owner_a && val_o && ins[22:21] == 2'd0);
             cover (s_a == S_EXEC && ins[31:28] == 4'd5 && ins[27:25] == 3'd2 && last_a);

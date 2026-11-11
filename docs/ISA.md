@@ -46,7 +46,9 @@ checker.
 - The smallest dwell the formal proof covers is 4 ticks.
 - The `sync` rule: on every path into a `sync` bit, the line must be at the
   opposite level of the bit's constant. `check_sync.py` checks this statically.
-  It does not cover NRZI programs, where a `sync` bit waits for any change.
+  Under NRZI a `sync` bit waits for a change of level, so it must send a 0,
+  and the line must not have moved since the listener last sampled it.
+  `check_sync.py` checks only the first of those two.
 - Between two timed bits there is room for a few instructions: with 16 ticks
   per bit, at most 7. More than that makes the next bit late.
 
