@@ -1079,3 +1079,38 @@ Checks on this version:
   13 covers reached.
 - Synthesis is the same to the cell (317,478 um2, 24,057 cells): only a
   debug output for the proof was added to the hart.
+
+## Chip changes after the first green build
+
+### Host readback for bring-up
+
+Two things could not be checked on real silicon through the host port. The
+program memory is latches written by a pulse, and nothing could read a word
+back. And a hart that sent or received nothing gave no sign of where it was
+waiting.
+
+Frame `7h` answers both. It returns a hart's program counter, then its role
+and state, then the instruction word it is at. The counter goes out first
+and the rest is captured on that same tick, so the six bytes describe one
+moment of a running hart. A stopped hart stands at its start address, so
+writing the start address and reading `7h` reads the memory back one word at
+a time, with no new read path into the memory: the hart's own fetch does it.
+The driver has `where()` and `read_program()` for the two uses.
+
+Cost: the hart gains two outputs and no logic. The top gains a 38-bit
+capture register. 38 flops and 1.6% area (317,478 to 322,491 um2
+synthesized, 24,708 cells); the estimated critical path is unchanged within
+noise, at 6.7 ns.
+
+Checks: a chip scenario reads a nine-word program back from address 20
+through a stopped hart, then finds two running harts waiting in the `claim`,
+each in its own role, before and after a byte goes through. A cocotb test
+does the same through the driver. Chip scenarios are 68 of 68 with 994 byte
+checks, cocotb is 6 of 6 and the replay is 643 of 643. Planted bugs: 29 of
+29 in the chip, six of them in the new logic; 41 of 41 in the hart; 29
+in the subset proof and 34 in the UART proof, plus their expected
+survivors. Both proofs pass, and the UART harness simulation is clean.
+
+Limits: the memory can be read only through a stopped hart. A word that was
+never written reads as whatever its latches hold. This version has not been
+through the Tiny Tapeout flow yet.

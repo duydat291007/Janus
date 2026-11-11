@@ -29,10 +29,10 @@ peripheral, or a witness that checks the traffic without driving anything.
 
 ## Status
 
-The design passed the full Tiny Tapeout flow: layout, precheck and gate-level
-test. Later commits changed only the proofs, their tools, the documents and
-the UART program, which a host loads at run time. The chip's logic is the
-same. Everything below was checked in simulation or by formal proof.
+The chip without the host readback frame passed the full Tiny Tapeout flow:
+layout, precheck and gate-level test. The readback frame is newer. It passes
+every local check and has not been through the flow yet. Everything below
+was checked in simulation or by formal proof.
 
 - UART, SPI, I2C, 1-Wire and CAN base frames run end to end through the host port,
   and 1-Wire also at real 1 us timing using the prescaler.
@@ -52,6 +52,9 @@ same. Everything below was checked in simulation or by formal proof.
   violation the other does not. It does not cover the jump on a break, `set`,
   clocked bits, traps, `claim`, `choice`, `match`, arbitration, resync or
   witnesses, so the other five protocols are not proven whole.
+- For bring-up, the host can read where each hart stands: its program
+  counter, role, state and current instruction, captured on one tick. Through
+  a stopped hart it can also read the program memory back.
 - CAN has no error frames or automatic retransmission, so it must not be used on
   a shared CAN bus.
 - Low-speed USB was a hold-out test. It failed on the frozen instruction set and
