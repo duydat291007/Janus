@@ -36,12 +36,20 @@ Each frame is selected by its first byte, and `h` is the hart number:
 | `4h ctl data` | Push a transmit entry: ctl 0 data, 1 STOP, 2 RESTART |
 | `5h xx xx ...` | Read received bytes; each dummy byte returns one |
 | `6h xx xx` | Read the violation count (it stops at 255), then the status flags |
+| `7h xx xx xx xx xx xx` | Read where hart h stands: its program counter, then `{role, 00, state}`, then the 4 bytes of the instruction word it is at, all from one tick |
 
 Status flags, from bit 5 down: receive overflow, arbitration lost, transmit full,
 transmit empty, receive full, receive empty.
 
 Set loopback in an earlier frame than the run bits, so harts leave reset watching
 the right line.
+
+Frame `7h` is for bring-up. When nothing arrives, it shows which instruction a
+hart is waiting at and in which state: 0 boot, 1 between instructions, 2
+claim, 3 waiting for a sync edge, 4 and 5 inside a timed bit, 6 waiting for an
+open-drain line to rise, 8 to 14 inside a clocked bit. A stopped hart stands
+at its start address, so writing the start address and reading `7h` reads the
+program memory back one word at a time.
 
 To try it, load a UART program, give hart 0 role 0 and hart 1 role 1, select
 loopback, run both, push a byte to hart 0, and read it back from hart 1.

@@ -28,6 +28,11 @@ CTL_DATA, CTL_STOP, CTL_RESTART = 0, 1, 2
 # Status flag bits, as returned by `status()`.
 FLAG_NAMES = ("rx_empty", "rx_full", "tx_empty", "tx_full", "arb_lost", "rx_overflow")
 
+# Where a hart stands, as returned by `where()`: one name per state number.
+STATE_NAMES = ("boot", "exec", "claim", "sync", "edge", "mid", "settle", "post",
+               "clock_enter", "clock_gap", "clock_top", "clock_a_wait", "clock_a",
+               "clock_b_wait", "clock_b", "fetch")
+
 PROGRAM_WORDS = 64
 
 
@@ -60,6 +65,10 @@ def frame_status(hart):
     return bytes((0x60 | hart, 0, 0))
 
 
+def frame_where(hart):
+    return bytes((0x70 | hart,)) + bytes(6)
+
+
 # Reply parsers.
 
 def parse_read(replies):
@@ -71,6 +80,14 @@ def parse_status(replies):
     """(violation count, {flag name: bool})."""
     flags = replies[2]
     return replies[1], {name: bool(flags >> i & 1) for i, name in enumerate(FLAG_NAMES)}
+
+
+def parse_where(replies):
+    """Where a hart stands, all from one tick: its program counter, the role
+    it holds now, its state, and the instruction word it is at."""
+    return {"pc": replies[1] & 0x3F, "role": replies[2] >> 6,
+            "state": STATE_NAMES[replies[2] & 15],
+            "word": replies[3] << 24 | replies[4] << 16 | replies[5] << 8 | replies[6]}
 
 
 class Janus:
@@ -132,6 +149,22 @@ class Janus:
     def status(self, hart):
         """(violation count, flags)."""
         return parse_status(self.transfer(frame_status(hart)))
+
+    def where(self, hart):
+        """Where a hart stands: {"pc", "role", "state", "word"}. Use it to see
+        what a hart is waiting for when nothing arrives."""
+        return parse_where(self.transfer(frame_where(hart)))
+
+    def read_program(self, hart, base, count):
+        """Read program words back from the chip. The hart must be stopped: a
+        stopped hart stands at its start address, so this moves that address
+        along the words and puts it back at `base`."""
+        words = []
+        for address in range(base, base + count):
+            self.write_register(hart, REG_START, address)
+            words.append(self.where(hart)["word"])
+        self.write_register(hart, REG_START, base)
+        return words
 
 
 def program_image(prog, base=0):
