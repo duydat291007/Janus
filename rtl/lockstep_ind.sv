@@ -13,8 +13,9 @@
 // Claims:
 //   DATA:  at every sample point the wire carries the owner's bit, so what the
 //          listener reads is what the owner sent.
-//   AGREE: both harts hold the same pc, last, counter, received bits, time and
-//          pins at every tick, and the same control state and bit edge at every
+//   AGREE: both harts hold the same pc, last, counter, received bits, violation
+//          count, time and pins at every tick, and the same control state and
+//          bit edge at every
 //          tick outside the short window while a listener waits on a sync bit.
 //          Coder state (CRC, run length, configuration) is identical too.
 //   LIVE:  a hart is only in S_EDGE, S_MID or S_SYNC between instructions, so
@@ -54,7 +55,8 @@ module lockstep_ind (input clk);
 
     wire [7:0]  oe_a, ov_a, oe_b, ov_b, count_a, count_b, rx_a, rx_b, pin_a, pin_b, s1_a, s1_b;
     wire [7:0]  armed_a, armed_b;
-    wire [50:0] code_a, code_b;
+    wire [49:0] code_a, code_b;
+    wire [7:0]  viol_a, viol_b;
     wire [4:0]  width_a, width_b;
     wire        stuffed_a, stuffed_b, stuff_bit_a, stuff_bit_b;
     wire [5:0]  pc_a, pc_b;
@@ -78,7 +80,7 @@ module lockstep_ind (input clk);
         .dbg_partial(partial_a), .dbg_role(role_a), .dbg_src(src_a), .dbg_mine(mine_a),
         .dbg_val(val_a), .dbg_pin(pin_a), .dbg_s1(s1_a), .dbg_armed(armed_a),
         .dbg_code(code_a), .dbg_inserted(stuffed_a), .dbg_stuff_bit(stuff_bit_a),
-        .dbg_width(width_a),
+        .dbg_width(width_a), .dbg_viol(viol_a),
         .dbg_clean(clean_a));
 
     janus_hart b (.clk(clk), .por(por), .rst(rst), .wire_in(bus), .oe(oe_b), .ov(ov_b),
@@ -92,7 +94,7 @@ module lockstep_ind (input clk);
         .dbg_partial(partial_b), .dbg_role(role_b), .dbg_src(src_b), .dbg_mine(mine_b),
         .dbg_val(val_b), .dbg_pin(pin_b), .dbg_s1(s1_b), .dbg_armed(armed_b),
         .dbg_code(code_b), .dbg_inserted(stuffed_b), .dbg_stuff_bit(stuff_bit_b),
-        .dbg_width(width_b),
+        .dbg_width(width_b), .dbg_viol(viol_b),
         .dbg_clean(clean_b));
 
     localparam S_BOOT = 4'd0, S_EXEC = 4'd1, S_SYNC = 4'd3, S_EDGE = 4'd4, S_MID = 4'd5;
@@ -166,6 +168,7 @@ module lockstep_ind (input clk);
             assert (last_a == last_b);
             assert (count_a == count_b);
             assert (rx_a == rx_b);
+            assert (viol_a == viol_b);   // a listener never flags what the owner sent
             assert (now_a == now_b);
             assert (dwell_a == dwell_b);
             assert (pin_a == pin_b);
@@ -203,7 +206,9 @@ module lockstep_ind (input clk);
                 assert (src_a == src_expected && src_b == src_expected);
                 assert (mine_a == owner_a && mine_b == !owner_a);
                 if (src_expected[1]) assert (val_o == src_expected[0]);
-                if (stuffed_a) assert (stuff_bit_a == stuff_bit_b && code_a[1] != code_a[0]);
+                // A stuff bit is the opposite of the run it follows.
+                if (stuffed_a) assert (stuff_bit_a == stuff_bit_b && code_a[3]
+                                       && code_a[2] != stuff_bit_a);
                 if (s_o == S_EDGE) begin
                     assert (s1_a == pin_a);
                     assert (bus == pin_a);

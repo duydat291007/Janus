@@ -1,5 +1,6 @@
 """Six protocols, each written once as a whole-protocol program."""
-from janus import ALL, INIT1, ONES, OPEN_DRAIN, PUSH_PULL, RESTART, STOP, WITNESS, Prog
+from janus import (ALL, INIT1, ONES, OPEN_DRAIN, PUSH_PULL, RESTART, STOP, Prog,
+                   crc_send_mask)
 
 A, B = "A", "B"  # UART sender and receiver
 C, T = "C", "T"  # controller and target
@@ -204,8 +205,9 @@ def can(bit):
 def usb(bit):
     """Low-speed USB, one OUT transaction: a token and a data packet from the
     host, then a handshake from the device. The host queues each packet as
-    its bytes after SYNC, CRC included, then STOP. The chip does the line
-    code, the stuffing, the CRC16 check and the end of packet."""
+    its bytes after SYNC. A packet ends with STOP, or with RESTART to have
+    the chip send the CRC16 it computed first. The chip does the line code,
+    the stuffing, the CRC16 and the end of packet."""
     p = Prog("usb", {"DP": PUSH_PULL, "DM": PUSH_PULL})
     p.hold_trap("DM", 1, 17 * bit, "tmo")  # idle bus: no packet is coming
 
@@ -215,7 +217,8 @@ def usb(bit):
         p.step("DM", owner, 1, bit)
 
     p.mode(nrzi=True, pair="DP", resync="DM", poly=0x8005, width=16 | INIT1,
-           resid=0x800D, on_error="done", on_break="eop2")
+           resid=0x800D, xor=crc_send_mask(0x8005, 16, 0xFFFF),  # sent inverted
+           on_error="done", on_break="eop2")
     p.label("top")
     p.counter(2)  # two host packets: token, then data
     p.label("packet")
@@ -228,10 +231,13 @@ def usb(bit):
     p.mode(width=16 | INIT1)  # the CRC starts after the PID
     p.label("byte")
     p.choice(H, [STOP, None], "eop")  # an empty queue also ends the packet
+    p.choice(H, [RESTART], "crc")
     p.load(H)
     p.bits("DM", H, 8, dwell=bit)
     p.store(D)
     p.jump("byte")
+    p.label("crc")  # only the host comes here: listeners take these as two bytes
+    p.bits("DM", H, 16, src="crc", dwell=bit)
     p.label("eop")
     p.bits("DM", H, 1, dwell=bit, brk=True)  # SE0; listeners see it and jump
     p.label("eop2")
@@ -250,14 +256,13 @@ def usb(bit):
     p.step("DM", D, 0, bit)
     p.jump("done")
 
-    p.label("lost")  # no handshake came: every hart counts a violation
-    p.mode(width=16 | INIT1)
-    p.branch("crc_bad", "done")
+    p.label("tmo")
+    p.branch("count0", "lost")  # the counter is 0 only while a handshake is due
     p.label("done")
     p.set("DM", ALL, None)
     p.set("DP", ALL, None)
     p.jump("top")
-    p.label("tmo")
-    p.branch("count0", "lost")  # the counter is 0 only while a handshake is due
-    p.jump("done")
+    p.label("lost")  # no handshake came: every hart counts a violation
+    p.mode(width=16 | INIT1)  # a restarted CRC is never the residual ...
+    p.branch("crc_bad", "done")  # ... so this always counts and jumps
     return p

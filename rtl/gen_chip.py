@@ -266,6 +266,13 @@ def main():
             undriven_pin=True)
         add("usb_witness_8_bytes", p.usb(16), "A", WITNESS, tx0=usb_full, ticks=16 * 250,
             undriven_pin=True)
+        # The chip sends the CRC16 it computed: RESTART stands where the two
+        # CRC bytes and STOP were. The device still receives 0xFB and 0xAE.
+        usb_crc = usb_full[:-3] + [RESTART]
+        add("usb_out_chip_crc", p.usb(16), "A", "B", tx0=usb_crc, ticks=16 * 240,
+            undriven_pin=True)
+        add("adversary_usb_chip_crc", p.usb(16), "A", WITNESS, tx0=usb_crc, ticks=16 * 250,
+            undriven_pin=True, fault0=70)
         # Adversaries: hart 0 flips one bit. The other hart must flag it.
         add("adversary_usb_data_bit", p.usb(16), "A", "B", tx0=usb_full, ticks=16 * 250,
             undriven_pin=True, fault0=70)

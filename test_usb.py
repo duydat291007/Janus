@@ -18,7 +18,7 @@ import traceback
 import encode
 import protocols
 import reference as ref
-from janus import Hart, INIT1, ONES, Prog, PUSH_PULL, STOP, WITNESS
+from janus import Hart, INIT1, ONES, Prog, PUSH_PULL, RESTART, STOP, WITNESS
 
 BIT = 16                      # ticks per USB bit
 FROZEN, TESTS = [], []
@@ -315,9 +315,9 @@ def witness_flags_a_short_eop():
 
 
 @case
-def line_states_are_legal():
+def line_states_are_legal(queue=None):
     bus = ref.UsbBus()
-    janus(bus, "A", "B", WITNESS, tx=out_queue(DATA))
+    janus(bus, "A", "B", WITNESS, tx=queue or out_queue(DATA))
     bus.run(BIT * 400)
     line = states(bus)
     assert (1, 1) not in line, "SE1 on the bus"
@@ -327,11 +327,11 @@ def line_states_are_legal():
 
 
 @case
-def no_bit_edge_slips():
+def no_bit_edge_slips(queue=None):
     """Every change on the wire is a whole number of bit times after its
     packet's first edge: no run of instructions made a bit late."""
     bus = ref.UsbBus()
-    janus(bus, "A", "B", WITNESS, tx=out_queue(DATA))
+    janus(bus, "A", "B", WITNESS, tx=queue or out_queue(DATA))
     bus.run(BIT * 400)
     line = states(bus)
     changes = [t for t in range(1, len(line)) if line[t] != line[t - 1]]
@@ -344,6 +344,51 @@ def no_bit_edge_slips():
         if line[t - 1] == ref.SE0:
             origin = None                    # the end of packet: the next edge starts one
     assert len(changes) > 60 and not late, (len(changes), late[:5])
+
+
+# After stage 2: the chip sends the CRC16 it computed. The host queues the PID
+# and the data, then RESTART where it used to queue two CRC bytes and STOP.
+
+def crc_queue(data):
+    return token_bytes() + [STOP] + data_bytes(data)[:-2] + [RESTART]
+
+
+@case
+def chip_sends_the_crc16():
+    """The CRC16 on the wire is the chip's own, and an independent device and
+    decoder accept it."""
+    bus = ref.UsbBus()
+    host, witness = janus(bus, "A", WITNESS, tx=crc_queue(DATA))
+    device = ref.UsbDevice(bus, BIT)
+    bus.add(device)
+    bus.run(BIT * 400)
+    check_transaction(ref.usb_decode(bus.trace, BIT), DATA)
+    assert device.acks == 1 and list(host.rx_q) == [ACK_BYTE]
+    assert list(witness.seen) == token_bytes() + data_bytes(DATA) + [ACK_BYTE]
+    assert (host.violations, witness.violations, bus.contentions) == (0, 0, 0)
+
+
+@case
+def chip_crc16_over_random_payloads():
+    rng = random.Random(3)
+    for trial in range(TRIALS):
+        data = [rng.choice([0x00, 0xFF, 0xFE, 0x7F, rng.randrange(256)])
+                for _ in range(rng.randrange(9))]
+        bus = ref.UsbBus()
+        host, device, witness = janus(bus, "A", "B", WITNESS, tx=crc_queue(data))
+        bus.run(BIT * 400)
+        check_transaction(ref.usb_decode(bus.trace, BIT), data)
+        # The device received the two CRC bytes the reference computes.
+        assert list(device.rx_q) == token_bytes() + data_bytes(data), (trial, data)
+        assert list(host.rx_q) == [ACK_BYTE], (trial, data)
+        assert host.violations + device.violations + witness.violations == 0, (trial, data)
+        assert bus.contentions == 0
+
+
+@case
+def chip_crc16_keeps_the_line_legal_and_on_time():
+    line_states_are_legal(crc_queue(DATA))
+    no_bit_edge_slips(crc_queue(DATA))
 
 
 @case
@@ -391,6 +436,8 @@ def run_mutants():
         "CRC starts at zero": set_mode(changed("width", lambda v: v & ~INIT1)),
         "wrong CRC residual": set_mode(changed("resid", lambda v: v ^ 1)),
         "wrong CRC polynomial": set_mode(changed("poly", lambda v: v ^ 0x10)),
+        "CRC sent as computed, not inverted": set_mode(without("xor")),
+        "one bit of the CRC send pattern wrong": set_mode(changed("xor", lambda v: v ^ 0x8000)),
         "listeners do not see a break": set_mode(without("on_break")),
         "SE0 not driven": lambda: setattr(Prog, "bits", no_break_bits),
         "CRC result ignored": lambda: setattr(Hart, "_branch", crc_ignored),

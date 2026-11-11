@@ -37,4 +37,17 @@ mutant "program word byte order" 's/wire \[31:0\]  wdata = {b0, b1, b2, shift};/
 mutant "write pulse hits every word" 's/wire en = wpulse \&\& waddr == w;/wire en = wpulse;/'
 mutant "hart 1 fetches with hart 0 pc" 's/{32{sel1\[f\]}}/{32{sel0[f]}}/'
 mutant "fetch also reads the next word" 's/{32{sel0\[f\]}}/{32{sel0[f] | sel0[(f + 1) % 64]}}/'
+# The queue's own test, tb_fifo.v, must be able to fail too.
+fifo_mutant() {
+    name="$1"; expr="$2"
+    sed -e "$expr" janus_chip.v > "$OUT/mut.v"
+    if cmp -s janus_chip.v "$OUT/mut.v"; then echo "NOT APPLIED $name"; return; fi
+    iverilog -g2012 -s tb_fifo -o "$OUT/mut.vvp" tb_fifo.v "$OUT/mut.v" janus_hart.v 2> /dev/null \
+        || { echo "NO COMPILE  $name"; return; }
+    vvp "$OUT/mut.vvp" | grep -q "^OK" && echo "SURVIVED    $name" || echo "CAUGHT(1) $name"
+}
+fifo_mutant "full queue refuses a push with a pop" 's/wire        take = push \&\& (!full || pop);/wire        take = push \&\& !full;/'
+fifo_mutant "full queue takes a push with no pop" 's/wire        take = push \&\& (!full || pop);/wire        take = push;/'
+fifo_mutant "queue full one entry early" 's/assign full = (wp ^ rp) == {1.b1, {LOG{1.b0}}};/assign full = wp - rp == {1'"'"'b0, {LOG{1'"'"'b1}}};/'
+
 mutant "one-hot pc a tick late" 's/pc_sel <= 64.d1 << pc_r;/pc_sel <= 64'"'"'d1 << pc;/' janus_hart.v

@@ -55,10 +55,11 @@ module janus_hart (
     output     [7:0]  dbg_pin,
     output     [7:0]  dbg_s1,
     output     [7:0]  dbg_armed,
-    output     [50:0] dbg_code,
+    output     [49:0] dbg_code,
     output            dbg_inserted,
     output            dbg_stuff_bit,
     output     [4:0]  dbg_width,
+    output     [7:0]  dbg_viol,
     output            dbg_clean
 `endif
 );
@@ -105,6 +106,7 @@ module janus_hart (
     reg [1:0]  c_pair;
     reg [15:0] c_resid;
     reg [5:0]  c_brk;
+    reg [15:0] c_xor;                  // XORed onto CRC bits as sent: bit k onto bit k
     reg [11:0] f_cnt;                  // timed bits this hart has owned
     reg        f_armed, faulty;        // the fault is still to come; this bit is it
 
@@ -117,7 +119,7 @@ module janus_hart (
     reg [3:0]  armed;                  // pin levels when last sampled
     reg [1:0]  role;
     reg [7:0]  tx, rx0, rx1, count;
-    reg        last, seen, saved, val, cur_mine, inserted, stuff_bit, run_valid, run_val;
+    reg        last, seen, val, cur_mine, inserted, stuff_bit, run_valid, run_val;
     reg [3:0]  k, run_len;
     reg        partial;                // inside a frame, past its first bit
     reg [11:0] now, edge_t, last_fall; // wide enough for the longest dwell
@@ -152,16 +154,17 @@ module janus_hart (
     assign dbg_s1 = {4'hF, s1};
     assign dbg_armed = {4'hF, armed};
     assign dbg_code = {c_stuff, c_poly, c_width, c_msb, crc, run_len, run_valid,
-                       run_valid & run_val, inserted, inserted & stuff_bit,
-                       inserted & saved};
+                       run_valid & run_val, inserted, inserted & stuff_bit};
     assign dbg_inserted = inserted;
     assign dbg_stuff_bit = stuff_bit;
     assign dbg_width = c_width;
+    assign dbg_viol = violations_r;
     // Everything the restricted program subset can never change from reset.
     assign dbg_clean = !c_rs_en && !lf_valid && c_lose == WITNESS
         && !c_l2_en && c_div == 0 && div_cnt == 0
         && !cfg0[15] && !cfg1[15] && !cfg2[15] && !cfg3[15]
         && !c_ones && !c_init1 && !c_pair_en && !c_nrzi && !c_brk_en && c_resid == 0
+        && c_xor == 0
         && !cfg6[15] && !f_armed && !faulty;
 `endif
 
@@ -207,9 +210,14 @@ module janus_hart (
         crc = c_init1 ? ~(16'hFFFF << c_width) : 16'd0;
     endtask
 
+    // The count stops at 255. Wrapping to 0 would read as a clean run.
+    task violate;
+        if (violations_r != 8'hFF) violations_r = violations_r + 1'b1;
+    endtask
+
     task fire(input [5:0] target);
         begin
-            if (partial) violations_r = violations_r + 1'b1;
+            if (partial) violate;
             partial = 0;
             role = base_role;
             edge_t = now;
@@ -273,7 +281,7 @@ module janus_hart (
             end else begin
                 if (cur_mine) begin
                     if (src_eff == 2'd0) next_tx;
-                    else if (src_eff == 2'd1) val = crc[c_width - 1'b1];
+                    else if (src_eff == 2'd1) val = crc[c_width - 1'b1] ^ c_xor[k];
                     else val = src_eff[0];
                 end
                 s = S_EDGE;
@@ -381,6 +389,7 @@ module janus_hart (
                 14: c_nrzi = v[0];
                 15: c_resid = v;
                 16: begin c_brk_en = v[6]; c_brk = v[5:0]; end
+                17: c_xor = v;
                 default: ;
             endcase
         end
@@ -398,7 +407,7 @@ module janus_hart (
         seen_push_r = 0; seen_push2_r = 0; arb_lost_r = 0;
         s = S_BOOT; s1 = 0; pin = 0; prev = 0; armed = 0; role = 0;
         tx = 0; rx0 = 0; rx1 = 0; count = 0;
-        last = 0; seen = 0; saved = 0; val = 0; cur_mine = 0;
+        last = 0; seen = 0; val = 0; cur_mine = 0;
         inserted = 0; stuff_bit = 0; run_valid = 0; run_val = 0;
         k = 0; run_len = 0; partial = 0; src_eff = 0;
         now = 0; edge_t = 0; last_fall = 0; lf_valid = 0;
@@ -407,7 +416,8 @@ module janus_hart (
         c_width = 0; c_err = 0; c_lose = WITNESS; c_clk = 0; c_clk_own = 0;
         c_cpol = 0; c_cpha = 0; c_l2_en = 0; c_l2_pin = 0; c_l2_own = 0; c_div = 0;
         c_ones = 0; c_init1 = 0; c_pair_en = 0; c_pair = 0; c_nrzi = 0;
-        c_resid = 0; c_brk_en = 0; c_brk = 0; f_cnt = 0; f_armed = 0; faulty = 0;
+        c_resid = 0; c_brk_en = 0; c_brk = 0; c_xor = 0;
+        f_cnt = 0; f_armed = 0; faulty = 0;
         oe <= 0; ov <= 0; pc <= 0; pc_sel <= 64'd1;
         tx_pop <= 0; tx_clear <= 0; rx_push <= 0; seen_push <= 0; seen_push2 <= 0;
         push_data <= 0; push_data2 <= 0; violations <= 0; arb_lost <= 0;
@@ -436,7 +446,7 @@ module janus_hart (
             c_lose = WITNESS; c_clk = 0; c_clk_own = 0; c_cpol = 0; c_cpha = 0;
             c_l2_en = 0; c_l2_pin = 0; c_l2_own = 0; c_div = 0;
             c_ones = 0; c_init1 = 0; c_pair_en = 0; c_pair = 0; c_nrzi = 0;
-            c_resid = 0; c_brk_en = 0; c_brk = 0;
+            c_resid = 0; c_brk_en = 0; c_brk = 0; c_xor = 0;
             f_cnt = 0; f_armed = cfg6[15]; faulty = 0;
         end else if (div_cnt != c_div) begin
             // Between prescaled ticks the hart holds still, so with prescaler
@@ -545,7 +555,7 @@ module janus_hart (
                                     end
                                     default: begin
                                         taken = crc != c_resid;
-                                        if (taken) violations_r = violations_r + 1'b1;
+                                        if (taken) violate;
                                     end
                                 endcase
                                 pc_r = taken ? ins[5:0] : pc_r + 1'b1;
@@ -713,7 +723,7 @@ module janus_hart (
                               edge_t = edge_t + i_dwell;
                               if (c_pair_en && broke && !cur_mine && !i_brk && c_brk_en) begin
                                   // A listener met a break in an ordinary bit.
-                                  if (partial) violations_r = violations_r + 1'b1;
+                                  if (partial) violate;
                                   partial = 0;
                                   inserted = 1'b0;
                                   pc_r = c_brk;
@@ -726,12 +736,12 @@ module janus_hart (
                                   if (!cur_mine) begin
                                       if (i_brk) begin
                                           if (!i_strm && !broke)
-                                              violations_r = violations_r + 1'b1;
+                                              violate;
                                       end else if (src_const && seen != src_eff[0] && (inserted || !i_strm))
-                                          violations_r = violations_r + 1'b1;
+                                          violate;
                                   end else if (is_data) begin
                                       if (c_lose != LOSE_NONE && val && !seen && !faulty)
-                                          lose(i_pin, 1'b0, 3'd0);
+                                          lose(i_pin, 1'b0, 2'd0);
                                   end else s = S_SETTLE;
                               end
                           end
@@ -748,8 +758,8 @@ module janus_hart (
                           // its readback, so a corrupted bit cannot enter its CRC.
                           coded = (cur_mine && is_mine(i_owner, role)) ? val : seen;
                           if (inserted) begin
-                              if (coded == saved) begin
-                                  violations_r = violations_r + 1'b1;
+                              if (coded != stuff_bit) begin
+                                  violate;
                                   partial = 0;
                                   inserted = 1'b0;
                                   pc_r = c_err;
@@ -772,7 +782,6 @@ module janus_hart (
                               if (run_len == c_stuff && (coded || !c_ones)) begin
                                   inserted = 1'b1;
                                   stuff_bit = !coded;
-                                  saved = coded;
                                   start_bit;
                               end else bit_done;
                           end

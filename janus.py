@@ -16,6 +16,7 @@ OPEN_DRAIN, PUSH_PULL = True, False
 SYNC_LAG = 2  # ticks from a hart driving a pin to any hart seeing it change
 ONES = 16   # mode(stuff=n | ONES): stuff a 0 after n ones; zeros are never stuffed
 INIT1 = 32  # mode(width=w | INIT1): the CRC restarts at all ones
+MAX_VIOLATIONS = 255  # the hardware counter stops here instead of wrapping to 0
 
 
 class Token:
@@ -28,6 +29,22 @@ class Token:
 
 # Control entries in a transmit queue. Anything else is a data byte.
 RESTART, STOP = Token("RESTART"), Token("STOP")
+
+
+def crc_send_mask(poly, width, xorout):
+    """The `xor` pattern that puts crc ^ xorout on the wire.
+
+    A sender's CRC register follows every bit it sends, CRC bits included,
+    so it always equals a listener's. Sending bit k changed feeds a 1 back
+    into the register, which changes later bits. This works out, bit by
+    bit, the pattern whose net effect on the wire is exactly xorout."""
+    top, full = 1 << (width - 1), (1 << width) - 1
+    drift, mask = 0, 0  # drift: how the register differs from a plain shift
+    for k in range(width):
+        flip = (xorout >> (width - 1 - k) & 1) ^ bool(drift & top)
+        mask |= flip << k
+        drift = (drift << 1) & full ^ (poly if flip else 0)
+    return mask
 
 
 @dataclass
@@ -122,13 +139,15 @@ class Prog:
     def mode(self, **fields):
         """Write configuration: msb, resync, stuff, poly, width, on_error,
         lose_to, clk, clk_owner, cpol, cpha, lane2, div, pair, nrzi, resid,
-        on_break. A lose_to other than the default is ROLE-DEPENDENT. Setting
+        on_break, xor. A lose_to other than the default is ROLE-DEPENDENT. Setting
         stuff above 0 restarts the coder; writing width restarts the CRC.
         pair: timed bits drive this pin as the complement of the bit's pin.
         nrzi: a 0 is a change of level and a 1 is none.
         resid: the CRC value that crc_bad accepts.
         on_break: where a listener jumps when it samples both pins of a pair
         low in an ordinary bit. ROLE-DEPENDENT: the owner does not jump.
+        xor: bit k of this pattern is XORed onto bit k of a `bits` with
+        src="crc" as it is sent. `crc_send_mask` works it out.
         Hardware writes one field per instruction word, so this emits one
         instruction for each field."""
         for name, value in fields.items():
@@ -206,6 +225,7 @@ class Hart:
         self.tx_q, self.rx_q, self.seen = deque(tx), deque(), deque()
         self.tx, self.rx, self.last, self.count = 0, [0, 0], 0, 0
         self.partial, self.violations, self.arb_lost = 0, 0, False
+        self.k = 0  # which bit of the current `bits` instruction
         self.held = {}
         self.now, self.edge, self.dwell = 0, 0, 1
         self.last_fall = -10**9
@@ -213,7 +233,7 @@ class Hart:
         self.cfg = dict(msb=False, resync=None, stuff=0, poly=0, width=0,
                         on_error=None, lose_to=WITNESS, clk=None, clk_owner=None,
                         cpol=0, cpha=0, lane2=None, div=0, pair=None,
-                        nrzi=False, resid=0, on_break=None)
+                        nrzi=False, resid=0, on_break=None, xor=0)
         self.s1 = dict(bus.wire)
         self.pin = dict(bus.wire)
         self.armed = dict(bus.wire)  # pin levels when last sampled
@@ -238,9 +258,12 @@ class Hart:
                 self._fire(goto)
         next(self.gen)
 
+    def _violate(self):
+        self.violations = min(self.violations + 1, MAX_VIOLATIONS)
+
     def _fire(self, goto):
         if self.partial:  # a frame ended mid-byte
-            self.violations += 1
+            self._violate()
         self.partial, self.role, self.edge = 0, self.base_role, self.now
         self.armed = dict(self.pin)
         self.gen = self._run(self.prog.labels[goto])
@@ -299,7 +322,8 @@ class Hart:
             taken = self.count > 0
         elif cond == "crc_bad":
             taken = self.crc != self.cfg["resid"]
-            self.violations += taken
+            if taken:
+                self._violate()
         else:
             taken = {"always": True, "last0": self.last == 0, "last1": self.last == 1,
                      "count0": self.count == 0}[cond]
@@ -345,7 +369,7 @@ class Hart:
             yield from self._clocked_bits(pin, owner, n, dwell, stream)
             return
         for k in range(n):
-            self.partial = k
+            self.partial = self.k = k
             if brk:
                 yield from self._timed_bit(pin, owner, 0, dwell, sync, free, brk=True)
             else:
@@ -362,7 +386,8 @@ class Hart:
                 val, self.tx = self.tx & 1, self.tx >> 1
             return val
         if src == "crc":
-            return (self.crc >> ((self.cfg["width"] & 31) - 1)) & 1
+            top = self.crc >> ((self.cfg["width"] & 31) - 1)
+            return (top ^ self.cfg["xor"] >> self.k) & 1
         return src
 
     def _shift_in(self, lane, seen):
@@ -402,7 +427,7 @@ class Hart:
 
     def _check(self, src, seen):
         if src in (0, 1) and seen != src:
-            self.violations += 1
+            self._violate()
 
     def _put(self, pin, level, brk=False):
         """Drive or release a timed bit's pin and, with a pair, its complement.
@@ -450,7 +475,7 @@ class Hart:
         self.edge += dwell
         if pair and broke and not mine and not brk and self.cfg["on_break"] is not None:
             if self.partial:  # the break cut a byte short
-                self.violations += 1
+                self._violate()
             self.partial = 0
             self.gen = self._run(self.prog.labels[self.cfg["on_break"]])
             yield  # this generator is abandoned here
@@ -460,7 +485,7 @@ class Hart:
         if not mine:
             if brk:
                 if not free and not broke:
-                    self.violations += 1
+                    self._violate()
             elif not free:
                 self._check(src, seen)
         elif is_data:
@@ -488,7 +513,7 @@ class Hart:
             extra = yield from self._timed_bit(pin, owner, 1 - seen, dwell, False, False,
                                                data=True)
             if extra == seen:
-                self.violations += 1
+                self._violate()
                 self.partial = 0
                 self.gen = self._run(self.prog.labels[self.cfg["on_error"]])
                 yield  # this generator is abandoned here

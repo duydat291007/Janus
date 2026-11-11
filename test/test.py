@@ -174,3 +174,28 @@ async def test_driver_class_drives_the_chip(dut):
     await host.wait(1200)
     assert await host.read(1, 2) == [0x84, 0x5A]
     assert await host.violations(0) == 0
+
+
+@cocotb.test()
+async def test_usb_out_with_the_chip_sending_the_crc16(dut):
+    """Low-speed USB, one OUT transaction in loopback: NRZI, stuffed bits, the
+    D+/D- pair, and a CRC16 the chip computes itself. The device answers ACK."""
+    host = await start(dut)
+    frames = []
+    chip = jh.Janus(lambda data: frames.append(bytes(data)) or bytes(len(data)))
+    image = jh.program_image(protocols.usb(16))
+    data = [0x00, 0x01, 0x7F, 0xFF, 0xFE, 0x80, 0xA5, 0x3C]
+    chip.load(image["words"], image["base"])
+    chip.configure(0, image, "A")
+    chip.configure(1, image, "B")
+    # An OUT token to address 5, endpoint 1, then DATA0. RESTART ends the
+    # packet with the CRC16 the chip computed.
+    chip.push(0, [0xE1, 0x85, 0x60, "STOP", 0xC3, *data, "RESTART"])
+    chip.run(True, True, loopback=True)
+    for frame in frames:
+        await host.transfer(frame)
+    await host.wait(16 * 240)
+    assert await host.read(1, 14) == [0xE1, 0x85, 0x60, 0xC3, *data, 0xFB, 0xAE]
+    assert await host.read(0, 1) == [0xD2]   # the handshake: ACK
+    assert await host.violations(0) == 0
+    assert await host.violations(1) == 0

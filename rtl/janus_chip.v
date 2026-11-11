@@ -38,6 +38,8 @@ module janus_fifo #(parameter W = 8, parameter LOG = 3) (
     // A pop or clear arrives a tick after the hart acted on it, so the outputs
     // look past it. The hart then never sees an entry it has already taken.
     wire        has_data = wp != rp;
+    // A full queue still takes a push in a tick that pops an entry.
+    wire        take = push && (!full || pop);
     wire [LOG:0] rp_next = rp + ((pop && has_data) ? 1'b1 : 1'b0);
     assign empty = clear || wp == rp_next;
     assign full = (wp ^ rp) == {1'b1, {LOG{1'b0}}};
@@ -54,12 +56,12 @@ module janus_fifo #(parameter W = 8, parameter LOG = 3) (
             wp <= 0;
             rp <= 0;
         end else begin
-            if (push && !full) wp <= wp + 1'b1;
+            if (take) wp <= wp + 1'b1;
             rp <= rp_next;
         end
     end
     always @(posedge clk)
-        if (!rst && !clear && push && !full) mem[wp[LOG-1:0]] <= din;
+        if (!rst && !clear && take) mem[wp[LOG-1:0]] <= din;
 endmodule
 
 // One hart with its FIFOs, registers and pin rotation.

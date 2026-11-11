@@ -24,6 +24,12 @@ if [ "${1:-test}" = "test" ]; then
         fi
     done
     echo "chip: $pass passed, $fail failed, $checks byte checks"
+    # The queue on its own: a push and a pop on the same tick of a full queue.
+    iverilog -g2012 -s tb_fifo -o "$OUT/fifo.vvp" tb_fifo.v janus_chip.v janus_hart.v 2>> "$OUT/iv.log" \
+        || { tail -20 "$OUT/iv.log"; exit 1; }
+    queue=$(vvp "$OUT/fifo.vvp" | grep -E "^(OK|MISMATCH)" | cut -c1-90)
+    echo "queue: $queue"
+    [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ] && [ "${queue:0:2}" = OK ] || exit 1
 fi
 
 if [ "${1:-test}" = "synth" ]; then

@@ -67,14 +67,14 @@ def usb_recovers(bus, host, device, witness):
 
 
 @case
-def usb_host_fault_anywhere():
-    _, clean, _, _ = usb(10 ** 9)
+def usb_host_fault_anywhere(queue=None):
+    _, clean, _, _ = usb(10 ** 9, queue=queue)
     total = clean.owned                      # bits the host sends in one transaction
     first_covered = 36 + 16                  # token packet, then the data SYNC and PID
     last_covered = total - 5                 # before SE0, SE0, J and the turnaround bit
     silent = []
     for n in range(0, total, STEP):
-        bus, host, device, witness = usb(n)
+        bus, host, device, witness = usb(n, queue=queue)
         assert host.fault is None, n         # the fault happened
         acked = tu.ACK_BYTE in host.rx_q
         if acked:                            # an answered packet carried the right data
@@ -87,6 +87,13 @@ def usb_host_fault_anywhere():
     print(f"     {total} positions; {len(silent)} unnoticed, all in the token or a PID: "
           f"{silent[0]}-{silent[-1]}")
     assert all(8 <= n < 32 or 44 <= n < 52 for n in silent), silent
+
+
+@case
+def usb_host_fault_anywhere_with_the_chip_sending_the_crc():
+    """The same sweep when the chip computes the CRC16: a wrong data bit must
+    not reach the CRC it sends, and a wrong CRC bit must be caught."""
+    usb_host_fault_anywhere(tu.crc_queue(tu.DATA))
 
 
 @case

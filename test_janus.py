@@ -109,6 +109,19 @@ def test_uart_witness_flags_bad_stop_bit():
     assert w.violations >= 1
 
 
+@case()
+def test_violation_count_stops_at_255():
+    """The chip's counter is 8 bits. It must stop at 255: wrapping to 0 would
+    make a very bad run read as a clean one."""
+    prog = uart(8)
+    bus = Bus(prog.pins)
+    w = Hart(prog, WITNESS, bus)
+    bus.add(ref.UartSender(bus, [0x00] * 300, 16), w)   # every stop bit reads low
+    bus.run(16 * 10 * 300 + 100)
+    assert len(w.seen) >= 290, len(w.seen)   # the witness followed about 300 frames
+    assert w.violations == 255, w.violations
+
+
 @case(40000, 66000)
 def test_uart_send_after_long_idle(idle):
     """A hart must not stall after idling past half its 16-bit timebase."""
