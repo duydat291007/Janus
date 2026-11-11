@@ -37,6 +37,12 @@ mutant "program word byte order" 's/wire \[31:0\]  wdata = {b0, b1, b2, shift};/
 mutant "write pulse hits every word" 's/wire en = wpulse \&\& waddr == w;/wire en = wpulse;/'
 mutant "hart 1 fetches with hart 0 pc" 's/{32{sel1\[f\]}}/{32{sel0[f]}}/'
 mutant "fetch also reads the next word" 's/{32{sel0\[f\]}}/{32{sel0[f] | sel0[(f + 1) % 64]}}/'
+mutant "debug frame reads the other hart's counter" 's/miso_sr <= {2.b00, h ? pc1 : pc0};/miso_sr <= {2'"'"'b00, h ? pc0 : pc1};/'
+mutant "debug frame captures the other hart" 's/snap <= h ? {role1, state1, ins1} : {role0, state0, ins0};/snap <= h ? {role0, state0, ins0} : {role1, state1, ins1};/'
+mutant "debug frame drops the role" 's/3.d1: miso_sr <= {snap\[37:36\], 2.b00, snap\[35:32\]};/3'"'"'d1: miso_sr <= {4'"'"'b0000, snap[35:32]};/'
+mutant "debug frame drops the state" 's/3.d1: miso_sr <= {snap\[37:36\], 2.b00, snap\[35:32\]};/3'"'"'d1: miso_sr <= {snap[37:36], 6'"'"'d0};/'
+mutant "debug frame swaps two word bytes" 's/3.d2: miso_sr <= snap\[31:24\];/3'"'"'d2: miso_sr <= snap[23:16];/'
+mutant "debug frame never captures" 's/snap <= h ? {role1, state1, ins1} : {role0, state0, ins0};/;/'
 # The queue's own test, tb_fifo.v, must be able to fail too.
 fifo_mutant() {
     name="$1"; expr="$2"

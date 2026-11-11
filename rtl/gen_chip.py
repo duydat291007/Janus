@@ -78,6 +78,14 @@ class Script:
         self.raw(EXPECT, flags)
         self.raw(CS_HIGH)
 
+    def expect_where(self, hart, pc, role, state, word):
+        """Frame 7h: a hart's program counter, role and state, and the word it is at."""
+        self.raw(CS_LOW)
+        self.raw(SEND, 0x70 | hart)
+        for byte in (pc, role << 6 | state, *word.to_bytes(4, "big")):
+            self.raw(EXPECT, byte)
+        self.raw(CS_HIGH)
+
     def write(self, path):
         self.raw(0)
         with open(path, "w") as f:
@@ -227,6 +235,38 @@ def quiet_start(out):
     s.write(os.path.join(out, "uart_quiet_start.hex"))
 
 
+def readback(out):
+    """Frame 7h. A stopped hart stands at its start address, so moving that
+    address reads the program back. Two running harts with nothing to send
+    are both found waiting in the claim, each in its own role."""
+    prog = p.uart(50)
+    base = 20
+    words = encode.assemble(prog, base)
+    boot, claim = 0, 2                        # state numbers
+    s = Script()
+    s.raw(PADS, 1)
+    s.load(prog, base)
+    s.setup(0, prog, "A", base, None, 0)
+    s.setup(1, prog, WITNESS, base, None, 0)
+    for i, word in enumerate(words):
+        s.reg(1, 10, base + i)
+        s.expect_where(1, base + i, encode.ROLE[WITNESS], boot, word)
+    s.expect_where(0, base, encode.ROLE["A"], boot, words[0])
+    s.setup(1, prog, "B", base, None, 0)
+    s.run(1, 1, 1)
+    s.wait(50 * 3)                            # past the idle bit
+    idle = prog.labels["idle"]
+    for _ in range(2):                        # before a frame, and after one
+        s.expect_where(0, base + idle, encode.ROLE["A"], claim, words[idle])
+        s.expect_where(1, base + idle, encode.ROLE["B"], claim, words[idle])
+        s.push(0, [0x5A])
+        s.wait(50 * 12 + MARGIN)
+        s.expect_rx(1, [0x5A])
+    s.expect_status(1, 0, 0xFF, RX_EMPTY | TX_EMPTY)
+    s.write(os.path.join(out, "debug_readback.hex"))
+    return len(words) + 5
+
+
 def can_tx(can_id, data):
     return [(can_id >> 8) << 5, can_id & 0xFF, len(data) << 1, *data]
 
@@ -313,6 +353,7 @@ def main():
     counts["uart_pads_stuck"] = 0
     quiet_start(out)
     counts["uart_quiet_start"] = 2
+    counts["debug_readback"] = readback(out)
     for name, n in counts.items():
         print(name, n)
 

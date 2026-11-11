@@ -18,6 +18,11 @@
 //   4h ctl data           push a transmit entry (ctl 0 data, 1 STOP, 2 RESTART)
 //   5h xx xx ...          read received bytes; each dummy byte returns one
 //   6h xx xx              read violation count, then status flags
+//   7h xx xx xx xx xx xx  read where hart h stands: its program counter, then
+//                         {role, 00, state}, then the instruction word it is
+//                         at, all captured on one tick. A stopped hart stands
+//                         at its start address, so this also reads the
+//                         program memory back, one word per start address.
 //
 // A host SCK must be at most 1/8 of clk. The status flags byte is
 // {0, 0, rx overflow, arbitration lost, tx full, tx empty, rx full, rx empty}.
@@ -83,7 +88,10 @@ module janus_unit (
     output [7:0]  rx_head,
     output        rx_empty,
     output [7:0]  violations,
-    output [7:0]  flags
+    output [7:0]  flags,
+    output [5:0]  pc,
+    output [3:0]  state,
+    output [1:0]  cur_role
 );
     reg [1:0] role;
     reg [7:0] addr, od_mask;
@@ -118,10 +126,10 @@ module janus_unit (
     janus_hart hart (
         .clk(clk), .por(por), .rst(!run), .wire_in(in), .oe(oe), .ov(ov),
         .od_mask(od_mask), .base_role(role), .reset_pc(start), .addr_reg(addr),
-        .pc(), .pc_sel(pc_sel), .ins(ins), .tx_valid(!tx_empty), .tx_ctl(tx_ctl), .tx_data(tx_data),
+        .pc(pc), .pc_sel(pc_sel), .ins(ins), .tx_valid(!tx_empty), .tx_ctl(tx_ctl), .tx_data(tx_data),
         .tx_pop(tx_pop), .tx_clear(tx_clear), .rx_push(rx_push), .seen_push(seen_push),
         .seen_push2(seen_push2), .push_data(push_data), .push_data2(push_data2),
-        .violations(violations), .arb_lost(arb_lost),
+        .violations(violations), .arb_lost(arb_lost), .state(state), .cur_role(cur_role),
         .cfg_we(reg_we && (reg_addr < 4'd6 || reg_addr == 4'd11)),
         // Register 11 is the hart's seventh: the adversary's fault.
         .cfg_addr(reg_addr == 4'd11 ? 3'd6 : reg_addr[2:0]), .cfg_data(reg_data));
@@ -205,6 +213,10 @@ module tt_um_duydat291007_janus (
 
     wire [7:0] line, low0, low1, high0, high1, head0, head1, viol0, viol1, flags0, flags1;
     wire       empty0, empty1;
+    wire [5:0] pc0, pc1;
+    wire [3:0] state0, state1;
+    wire [1:0] role0, role1;
+    reg [37:0] snap;               // a hart's role, state and instruction, for frame 7h
     // Reading an empty FIFO returns 0, not whatever is in its memory.
     wire [7:0] rd_head = h ? (empty1 ? 8'd0 : head1) : (empty0 ? 8'd0 : head0);
     wire [63:0] sel0, sel1;
@@ -261,13 +273,13 @@ module tt_um_duydat291007_janus (
         .sel(sel0), .ins(ins0), .reg_we(reg_we && !cmd[0]), .reg_addr(a0[3:0]),
         .reg_data({b0, in_byte}), .tx_push(tx_we && !cmd[0]), .tx_din({a0[1:0], in_byte}),
         .rx_pop(rx_rd && !cmd[0]), .rx_head(head0), .rx_empty(empty0),
-        .violations(viol0), .flags(flags0));
+        .violations(viol0), .flags(flags0), .pc(pc0), .state(state0), .cur_role(role0));
 
     janus_unit u1 (.clk(clk), .por(por), .run(run1), .line(line), .low(low1), .high(high1),
         .sel(sel1), .ins(ins1), .reg_we(reg_we && cmd[0]), .reg_addr(a0[3:0]),
         .reg_data({b0, in_byte}), .tx_push(tx_we && cmd[0]), .tx_din({a0[1:0], in_byte}),
         .rx_pop(rx_rd && cmd[0]), .rx_head(head1), .rx_empty(empty1),
-        .violations(viol1), .flags(flags1));
+        .violations(viol1), .flags(flags1), .pc(pc1), .state(state1), .cur_role(role1));
 
     // Power-on reset goes to the flops' reset pins throughout the chip, so no
     // register depends on gate-level simulation resolving a synchronous reset.
@@ -290,6 +302,7 @@ module tt_um_duydat291007_janus (
             run0 <= 0;
             run1 <= 0;
             loopback <= 0;
+            snap <= 0;
         end else begin
           sck_s <= {sck_s[1:0], ui_in[0]};
           mosi_s <= {mosi_s[0], ui_in[1]};
@@ -330,6 +343,22 @@ module tt_um_duydat291007_janus (
                 if (op == 4'h6) begin
                     if (index == 0) miso_sr <= h ? viol1 : viol0;
                     if (index == 1) miso_sr <= h ? flags1 : flags0;
+                end
+                if (op == 4'h7) begin
+                    // The counter goes out first. The rest is held, so all
+                    // six bytes describe the same tick of a running hart.
+                    case (index)
+                        3'd0: begin
+                            miso_sr <= {2'b00, h ? pc1 : pc0};
+                            snap <= h ? {role1, state1, ins1} : {role0, state0, ins0};
+                        end
+                        3'd1: miso_sr <= {snap[37:36], 2'b00, snap[35:32]};
+                        3'd2: miso_sr <= snap[31:24];
+                        3'd3: miso_sr <= snap[23:16];
+                        3'd4: miso_sr <= snap[15:8];
+                        3'd5: miso_sr <= snap[7:0];
+                        default: ;
+                    endcase
                 end
             end
           end

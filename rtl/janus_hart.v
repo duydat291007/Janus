@@ -34,6 +34,8 @@ module janus_hart (
     output reg [7:0]  push_data2,
     output reg [7:0]  violations,
     output reg        arb_lost,
+    output     [3:0]  state,       // where the hart stands, for the host's debug frame
+    output     [1:0]  cur_role,    // the role it holds now: a hart can step aside
     input             cfg_we,
     input      [2:0]  cfg_addr,
     input      [15:0] cfg_data
@@ -136,6 +138,9 @@ module janus_hart (
     reg [7:0]  masked;
     reg [1:0]  src_eff;
     integer    j;
+
+    assign state = s;
+    assign cur_role = role;
 
 `ifdef FORMAL
     assign dbg_s = s;

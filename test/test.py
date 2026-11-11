@@ -199,3 +199,39 @@ async def test_usb_out_with_the_chip_sending_the_crc16(dut):
     assert await host.read(0, 1) == [0xD2]   # the handshake: ACK
     assert await host.violations(0) == 0
     assert await host.violations(1) == 0
+
+
+@cocotb.test()
+async def test_host_reads_back_the_program_and_where_a_hart_waits(dut):
+    """Frame 7h. The driver reads the program memory back through a stopped
+    hart, and then finds both running harts waiting in the claim, each in its
+    own role, before a byte goes through."""
+    host = await start(dut)
+    image = jh.program_image(protocols.uart(50), base=9)
+    count = len(image["words"])
+    await host.load(image)
+    await host.configure(0, image, "A")
+    await host.configure(1, image, "B")
+    frames = []
+    chip = jh.Janus(lambda data: frames.append(bytes(data)) or bytes(len(data)))
+    chip.read_program(1, image["base"], count)
+    words = []
+    for frame in frames:
+        replies = await host.transfer(frame)
+        if frame == jh.frame_where(1):
+            where = jh.parse_where(replies)
+            assert (where["pc"], where["state"]) == (image["base"] + len(words), "boot"), where
+            words.append(where["word"])
+    assert words == image["words"], [hex(w) for w in words]
+    await host.transfer(jh.frame_register(0, jh.REG_START, image["base"]))
+    await host.start_pair_in_loopback()
+    await host.wait(50 * 3)
+    claim = image["base"] + 2
+    for hart, role in ((0, "A"), (1, "B")):
+        where = jh.parse_where(await host.transfer(jh.frame_where(hart)))
+        assert where == {"pc": claim, "role": jh.ROLE[role], "state": "claim",
+                         "word": image["words"][2]}, where
+    await host.push(0, [0x5A])
+    await host.wait(50 * 13)
+    assert await host.read(1, 1) == [0x5A]
+    assert await host.violations(1) == 0
