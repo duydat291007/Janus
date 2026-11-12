@@ -1,10 +1,10 @@
 // verilator lint_off LATCH
-// Janus chip top: two harts, 64 words of shared program memory, FIFOs and an
+// Janus chip top: three harts, 64 words of shared program memory, FIFOs and an
 // SPI host port.
 //
 // ui_in[0] SCK, ui_in[1] MOSI, ui_in[2] CSn (active low). SPI mode 0, MSB first.
 // uo_out[0] MISO, [1] receive data waiting, [2] any violation, [3] arbitration
-// lost, [4] hart 0 running, [5] hart 1 running.
+// lost, [4] hart 0 running, [5] hart 1 running, [6] hart 2 running.
 // uio[7:0] are the 8 protocol pins.
 //
 // Host frames, chosen by the first byte (h is the hart number):
@@ -12,7 +12,8 @@
 //   2h reg hi lo          write a hart register: 0-5 traps, 6 role, 7 address,
 //                         8 open-drain mask, 9 pin rotation, 10 start address,
 //                         11 adversary fault
-//   30 ctrl               bit 0 run hart 0, bit 1 run hart 1, bit 2 loopback
+//   30 ctrl               bit 0 run hart 0, bit 1 run hart 1, bit 2 loopback,
+//                         bit 3 run hart 2
 //                         Set loopback in an earlier frame than the run bits, so
 //                         harts leave reset already watching the right line.
 //   4h ctl data           push a transmit entry (ctl 0 data, 1 STOP, 2 RESTART)
@@ -199,27 +200,29 @@ module tt_um_duydat291007_janus (
     reg [2:0]  index;
     reg        miso, reload;
     reg [7:0]  a0, b0, b1, b2;
-    reg        run0, run1, loopback;
+    reg        run0, run1, run2, loopback;
 
     wire [7:0] in_byte = {shift[6:0], mosi_s[1]};
     wire       byte_done = selected && sck_rise && bits == 3'd7;
     wire [3:0] op = (index == 0) ? in_byte[7:4] : cmd[7:4];
-    wire       h = (index == 0) ? in_byte[0] : cmd[0];
+    wire [1:0] h = (index == 0) ? in_byte[1:0] : cmd[1:0];
 
     wire prog_we = byte_done && index == 3'd5 && cmd[7:4] == 4'h1;
     wire reg_we = byte_done && index == 3'd3 && cmd[7:4] == 4'h2;
     wire tx_we = byte_done && index == 3'd2 && cmd[7:4] == 4'h4;
     wire rx_rd = byte_done && index != 0 && cmd[7:4] == 4'h5;
 
-    wire [7:0] line, low0, low1, high0, high1, head0, head1, viol0, viol1, flags0, flags1;
-    wire       empty0, empty1;
-    wire [5:0] pc0, pc1;
-    wire [3:0] state0, state1;
-    wire [1:0] role0, role1;
+    wire [7:0] line, low0, low1, low2, high0, high1, high2, head0, head1, head2;
+    wire [7:0] viol0, viol1, viol2, flags0, flags1, flags2;
+    wire       empty0, empty1, empty2;
+    wire [5:0] pc0, pc1, pc2;
+    wire [3:0] state0, state1, state2;
+    wire [1:0] role0, role1, role2;
     reg [37:0] snap;               // a hart's role, state and instruction, for frame 7h
     // Reading an empty FIFO returns 0, not whatever is in its memory.
-    wire [7:0] rd_head = h ? (empty1 ? 8'd0 : head1) : (empty0 ? 8'd0 : head0);
-    wire [63:0] sel0, sel1;
+    wire [7:0] rd_head = h[1] ? (empty2 ? 8'd0 : head2)
+                         : h[0] ? (empty1 ? 8'd0 : head1) : (empty0 ? 8'd0 : head0);
+    wire [63:0] sel0, sel1, sel2;
 
     // Program memory: one latch per bit, at about half the area of a flop with
     // its write mux. Load programs only while the harts that run them are
@@ -232,14 +235,16 @@ module tt_um_duydat291007_janus (
     // Each fetch is an AND-OR over the words, steered by the hart's one-hot
     // pc. A binary pc would have each of its bits steer hundreds of muxes,
     // which was the slowest path on the chip.
-    reg  [31:0]  ins0, ins1;
+    reg  [31:0]  ins0, ins1, ins2;
     integer      f;
     always @* begin
         ins0 = 32'd0;
         ins1 = 32'd0;
+        ins2 = 32'd0;
         for (f = 0; f < 64; f = f + 1) begin
             ins0 = ins0 | (words[32 * f +: 32] & {32{sel0[f]}});
             ins1 = ins1 | (words[32 * f +: 32] & {32{sel1[f]}});
+            ins2 = ins2 | (words[32 * f +: 32] & {32{sel2[f]}});
         end
     end
 
@@ -263,23 +268,29 @@ module tt_um_duydat291007_janus (
         end
     endgenerate
 
-    wire [7:0] low = low0 | low1;
-    wire [7:0] high = high0 | high1;
+    wire [7:0] low = low0 | low1 | low2;
+    wire [7:0] high = high0 | high1 | high2;
     assign uio_oe = low | high;
     assign uio_out = ~low;
     assign line = loopback ? ~low : uio_in;
 
     janus_unit u0 (.clk(clk), .por(por), .run(run0), .line(line), .low(low0), .high(high0),
-        .sel(sel0), .ins(ins0), .reg_we(reg_we && !cmd[0]), .reg_addr(a0[3:0]),
-        .reg_data({b0, in_byte}), .tx_push(tx_we && !cmd[0]), .tx_din({a0[1:0], in_byte}),
-        .rx_pop(rx_rd && !cmd[0]), .rx_head(head0), .rx_empty(empty0),
+        .sel(sel0), .ins(ins0), .reg_we(reg_we && cmd[1:0] == 2'd0), .reg_addr(a0[3:0]),
+        .reg_data({b0, in_byte}), .tx_push(tx_we && cmd[1:0] == 2'd0), .tx_din({a0[1:0], in_byte}),
+        .rx_pop(rx_rd && cmd[1:0] == 2'd0), .rx_head(head0), .rx_empty(empty0),
         .violations(viol0), .flags(flags0), .pc(pc0), .state(state0), .cur_role(role0));
 
     janus_unit u1 (.clk(clk), .por(por), .run(run1), .line(line), .low(low1), .high(high1),
-        .sel(sel1), .ins(ins1), .reg_we(reg_we && cmd[0]), .reg_addr(a0[3:0]),
-        .reg_data({b0, in_byte}), .tx_push(tx_we && cmd[0]), .tx_din({a0[1:0], in_byte}),
-        .rx_pop(rx_rd && cmd[0]), .rx_head(head1), .rx_empty(empty1),
+        .sel(sel1), .ins(ins1), .reg_we(reg_we && cmd[1:0] == 2'd1), .reg_addr(a0[3:0]),
+        .reg_data({b0, in_byte}), .tx_push(tx_we && cmd[1:0] == 2'd1), .tx_din({a0[1:0], in_byte}),
+        .rx_pop(rx_rd && cmd[1:0] == 2'd1), .rx_head(head1), .rx_empty(empty1),
         .violations(viol1), .flags(flags1), .pc(pc1), .state(state1), .cur_role(role1));
+
+    janus_unit u2 (.clk(clk), .por(por), .run(run2), .line(line), .low(low2), .high(high2),
+        .sel(sel2), .ins(ins2), .reg_we(reg_we && cmd[1:0] == 2'd2), .reg_addr(a0[3:0]),
+        .reg_data({b0, in_byte}), .tx_push(tx_we && cmd[1:0] == 2'd2), .tx_din({a0[1:0], in_byte}),
+        .rx_pop(rx_rd && cmd[1:0] == 2'd2), .rx_head(head2), .rx_empty(empty2),
+        .violations(viol2), .flags(flags2), .pc(pc2), .state(state2), .cur_role(role2));
 
     // Power-on reset goes to the flops' reset pins throughout the chip, so no
     // register depends on gate-level simulation resolving a synchronous reset.
@@ -301,6 +312,7 @@ module tt_um_duydat291007_janus (
             reload <= 0;
             run0 <= 0;
             run1 <= 0;
+            run2 <= 0;
             loopback <= 0;
             snap <= 0;
         end else begin
@@ -333,6 +345,7 @@ module tt_um_duydat291007_janus (
                     run0 <= in_byte[0];
                     run1 <= in_byte[1];
                     loopback <= in_byte[2];
+                    run2 <= in_byte[3];
                 end
                 // What the next byte reads back.
                 miso_sr <= 8'd0;
@@ -341,16 +354,17 @@ module tt_um_duydat291007_janus (
                     else reload <= 1'b1;   // the FIFO moves on this tick
                 end
                 if (op == 4'h6) begin
-                    if (index == 0) miso_sr <= h ? viol1 : viol0;
-                    if (index == 1) miso_sr <= h ? flags1 : flags0;
+                    if (index == 0) miso_sr <= h[1] ? viol2 : h[0] ? viol1 : viol0;
+                    if (index == 1) miso_sr <= h[1] ? flags2 : h[0] ? flags1 : flags0;
                 end
                 if (op == 4'h7) begin
                     // The counter goes out first. The rest is held, so all
                     // six bytes describe the same tick of a running hart.
                     case (index)
                         3'd0: begin
-                            miso_sr <= {2'b00, h ? pc1 : pc0};
-                            snap <= h ? {role1, state1, ins1} : {role0, state0, ins0};
+                            miso_sr <= {2'b00, h[1] ? pc2 : h[0] ? pc1 : pc0};
+                            snap <= h[1] ? {role2, state2, ins2}
+                                    : h[0] ? {role1, state1, ins1} : {role0, state0, ins0};
                         end
                         3'd1: miso_sr <= {snap[37:36], 2'b00, snap[35:32]};
                         3'd2: miso_sr <= snap[31:24];
@@ -365,8 +379,9 @@ module tt_um_duydat291007_janus (
         end
     end
 
-    assign uo_out = {2'b00, run1, run0, flags0[4] | flags1[4],
-                     viol0 != 0 || viol1 != 0, !empty0 || !empty1, miso};
+    assign uo_out = {1'b0, run2, run1, run0, flags0[4] | flags1[4] | flags2[4],
+                     viol0 != 0 || viol1 != 0 || viol2 != 0,
+                     !empty0 || !empty1 || !empty2, miso};
 
     wire unused = &{ena, ui_in[7:3], 1'b0};
 endmodule
