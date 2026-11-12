@@ -1,6 +1,7 @@
 // Unbounded proof by k-induction of one complete protocol: the UART program
-// from protocols.py, word for word as the assembler emits it, on two real
-// harts. Hart a is the sender (role A) and hart b the receiver (role B).
+// from protocols.py, word for word as the assembler emits it, on three real
+// harts, one in each role: hart a is the sender (role A), hart b the receiver
+// (role B) and hart wit a witness, whose signals end in _w.
 //
 // lockstep_ind.sv proves a subset of the instruction set for any program, and
 // compares the two harts tick for tick. That cannot follow `claim`: a receiver
@@ -16,11 +17,11 @@
 //   flt         what the line reads while nothing drives it, on every tick
 //   other       the three pins the program does not use, on every tick
 //   unwritten   what the other 55 program words hold
-//   the receiver's queue, and both address registers
+//   the receiver's and the witness's queues, and all three address registers
 //
 // Assumed:
-//   - both harts leave reset on the same tick, with no traps, no prescaler
-//     and no adversary fault configured;
+//   - all three harts leave reset on the same tick, with no traps, no
+//     prescaler and no adversary fault configured;
 //   - a queue entry stays until the hart takes it, as in janus_fifo;
 //   - the line is low if a hart drives it low, high if one drives it high,
 //     and `flt` otherwise. That covers loopback, where an undriven line reads
@@ -30,14 +31,14 @@
 //   DATA   every byte the receiver stores is the byte the sender last took
 //          from its queue. Takes and stores alternate, so no byte is lost,
 //          repeated or invented, and the sender never sends from an empty
-//          queue.
+//          queue. The witness logs the same byte on the same tick.
 //   WIRE   a monitor that sees only the wire, from the tick the sender first
 //          drives it, reads standard frames: a start bit low, the eight bits
 //          of the byte the sender took, least significant first, and a stop
 //          bit high, each for exactly BIT ticks. Every start bit follows at
 //          least BIT ticks of high line, and comes only after a byte was taken.
-//   CLEAN  neither hart counts a violation, loses arbitration, clears its
-//          queue or stores anything else, and the receiver never drives.
+//   CLEAN  no hart counts a violation, loses arbitration, clears its queue
+//          or stores anything else, and only the sender ever drives.
 //   LIVE   a hart rests only in boot, between instructions, in the claim, or
 //          in a bit's edge or mid state, and the last two end within one bit
 //          time. The receiver leaves the claim two ticks after the start bit
@@ -51,7 +52,8 @@
 module uart_ind (input clk, input [10:0] BIT, input [5:0] start, input [31:0] unwritten,
                  input [7:0] addr_a, addr_b, input flt, input [2:0] other,
                  input valid_a, valid_b, input [7:0] data_a, data_b,
-                 input [1:0] ctl_a, ctl_b);
+                 input [1:0] ctl_a, ctl_b, input [7:0] addr_w, input valid_w,
+                 input [7:0] data_w, input [1:0] ctl_w);
     parameter MINBIT = 8;
 
     `include "uart_rom.vh"
@@ -70,6 +72,10 @@ module uart_ind (input clk);
     (* anyseq *)   wire        valid_a, valid_b;
     (* anyseq *)   wire [7:0]  data_a, data_b;
     (* anyseq *)   wire [1:0]  ctl_a, ctl_b;
+    (* anyconst *) wire [7:0]  addr_w;
+    (* anyseq *)   wire        valid_w;
+    (* anyseq *)   wire [7:0]  data_w;
+    (* anyseq *)   wire [1:0]  ctl_w;
 `endif
 
     reg [1:0] step = 0;
@@ -89,10 +95,21 @@ module uart_ind (input clk);
     wire        pop_a, pop_b, clear_a, clear_b, push_a, push_b, seen_a, seen_b, seen2_a, seen2_b;
     wire        lost_a, lost_b;
 
+    // The witness.
+    wire [7:0]  oe_w, ov_w, count_w, rx_w, pin_w, s1_w, armed_w, viol_w, vout_w, pdata_w;
+    wire [87:0] code_w;
+    wire [5:0]  pc_w;
+    wire [3:0]  s_w, k_w;
+    wire [4:0]  partial_w;
+    wire [11:0] now_w, edge_w;
+    wire [1:0]  role_w, src_w;
+    wire        last_w, mine_w, val_w, clean_w;
+    wire        pop_w, clear_w, push_w, seen_w, seen2_w, lost_w;
+
     // TX is push-pull: a hart driving it low wins, one driving it high sets
     // it otherwise, and with no driver it reads whatever `flt` says.
-    wire        low = (oe_a[0] && !ov_a[0]) || (oe_b[0] && !ov_b[0]);
-    wire        high = (oe_a[0] && ov_a[0]) || (oe_b[0] && ov_b[0]);
+    wire        low = (oe_a[0] && !ov_a[0]) || (oe_b[0] && !ov_b[0]) || (oe_w[0] && !ov_w[0]);
+    wire        high = (oe_a[0] && ov_a[0]) || (oe_b[0] && ov_b[0]) || (oe_w[0] && ov_w[0]);
     wire [7:0]  bus = {4'hF, other, low ? 1'b0 : high ? 1'b1 : flt};
     wire        w = bus[0];
 
@@ -126,6 +143,21 @@ module uart_ind (input clk);
         .dbg_val(val_b), .dbg_pin(pin_b), .dbg_s1(s1_b), .dbg_armed(armed_b),
         .dbg_code(code_b), .dbg_inserted(), .dbg_stuff_bit(), .dbg_width(),
         .dbg_viol(viol_b), .dbg_tx(tx_b), .dbg_clean(clean_b));
+
+    wire [31:0] ins_w = uart_word(pc_w - start, BIT, start, unwritten);
+
+    janus_hart wit (.clk(clk), .por(por), .rst(rst), .wire_in(bus), .oe(oe_w), .ov(ov_w),
+        .od_mask(8'h00), .base_role(2'd3), .reset_pc(start), .addr_reg(addr_w), .pc(pc_w),
+        .pc_sel(), .ins(ins_w), .tx_valid(valid_w), .tx_ctl(ctl_w), .tx_data(data_w),
+        .tx_pop(pop_w), .tx_clear(clear_w), .rx_push(push_w), .seen_push(seen_w),
+        .seen_push2(seen2_w), .push_data(pdata_w), .push_data2(), .violations(vout_w),
+        .arb_lost(lost_w), .cfg_we(1'b0), .cfg_addr(3'd0), .cfg_data(16'd0),
+        .dbg_s(s_w), .dbg_count(count_w), .dbg_rx(rx_w), .dbg_last(last_w),
+        .dbg_now(now_w), .dbg_edge(edge_w), .dbg_dwell(), .dbg_k(k_w),
+        .dbg_partial(partial_w), .dbg_role(role_w), .dbg_src(src_w), .dbg_mine(mine_w),
+        .dbg_val(val_w), .dbg_pin(pin_w), .dbg_s1(s1_w), .dbg_armed(armed_w),
+        .dbg_code(code_w), .dbg_inserted(), .dbg_stuff_bit(), .dbg_width(),
+        .dbg_viol(viol_w), .dbg_tx(), .dbg_clean(clean_w));
 
     localparam S_BOOT = 4'd0, S_EXEC = 4'd1, S_CLAIM = 4'd2, S_EDGE = 4'd4, S_MID = 4'd5;
 
@@ -230,7 +262,7 @@ module uart_ind (input clk);
         if (v_q && !pop_a) assume (valid_a);
 
         assert (step <= 2'd2);
-        if (!por) assert (clean_a && clean_b);
+        if (!por) assert (clean_a && clean_b && clean_w);
         if (!rst) begin
             // CLEAN
             assert (viol_a == 0 && viol_b == 0 && vout_a == 0 && vout_b == 0);
@@ -359,6 +391,17 @@ module uart_ind (input clk);
                 assert (last_b == last_2 && rx_b == rx_2 && edge_b == edge_2 + 12'd2);
                 assert (b_exec || b_edge || b_mid);
             end
+
+            // The witness is the receiver in everything but its role and where
+            // its bytes go: it logs each one on the tick the receiver stores it.
+            assert (role_w == 2'd3 && pc_w == pc_b && s_w == s_b && k_w == k_b);
+            assert (partial_w == partial_b && last_w == last_b && rx_w == rx_b);
+            assert (now_w == now_b && edge_w == edge_b && pin_w == pin_b && s1_w == s1_b);
+            assert (armed_w == armed_b && mine_w == mine_b && src_w == src_b && val_w == val_b);
+            assert (code_w == 0 && count_w == 0 && viol_w == 0 && vout_w == 0 && oe_w == 0);
+            assert (!lost_w && !clear_w && !push_w && !pop_w && !seen2_w);
+            assert (seen_w == push_b && pdata_w == pdata_b);
+            if (seen_w) assert (pend && pdata_w == cur);
 
             // The monitor against the sender. Before the sender drives, the
             // monitor is held in reset.
