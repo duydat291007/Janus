@@ -15,6 +15,12 @@
   "//": "Users have reported that values up to 80 worked well for them.",
   "PL_TARGET_DENSITY_PCT": 45,
 
+  "//": "SYNTH_STRATEGY - The default, DELAY 4, sizes and buffers for speed. This design has several",
+  "//": "times the timing slack it needs at 25 MHz, and layout takes hours, so map for area instead.",
+  "//": "The IO pad cells are kept out because synthesis once used them as buffers.",
+  "SYNTH_STRATEGY": "AREA 0",
+  "EXTRA_EXCLUDED_CELLS": ["sg13cmos5l_IOPad*"],
+
   "//": "CLOCK_PERIOD - Increase this in case you are getting setup time violations.",
   "//": "The value is in nanoseconds, so 20ns == 50MHz.",
   "CLOCK_PERIOD": 40,
