@@ -1114,3 +1114,27 @@ survivors. Both proofs pass, and the UART harness simulation is clean.
 Limits: the memory can be read only through a stopped hart. A word that was
 never written reads as whatever its latches hold. This version has not been
 through the Tiny Tapeout flow yet.
+
+### The witness joins the UART proof
+
+The UART proof had a sender and a receiver. It now runs three harts, one in
+each role, so the limit "a witness is not in the proof" is gone. The witness
+is the receiver in everything but its role and where its bytes go, and the
+proof says exactly that: at every tick it holds the receiver's program
+counter, state, bit count, received bits, bit edge and sampled levels, it
+never drives, stores, takes or flags anything, and it logs each byte on the
+tick the receiver stores it. So the byte the witness logs is the byte the
+sender took.
+
+The proof still closes with no new invariant about timing, but the third
+hart makes it slower: about 14 minutes, was 2.
+
+It is not vacuous: 37 planted bugs each break it, three of them new and
+aimed at the witness (it logs nothing, it stores like a receiver, it samples
+another pin), plus the two expected survivors. The harness simulation now has
+the third hart and checks the witness's byte against the scoreboard too:
+24 runs, 1,745 frames over 5.4 million ticks, 16 runs
+starting with the line low, no failure.
+
+Limits that remain: all three harts start together and share one clock, bit
+times start at 8 ticks, and the other five protocols are not proven whole.

@@ -18,10 +18,10 @@ module tb_uart_ind;
     reg [10:0] BIT;
     reg [5:0]  start;
     reg [31:0] unwritten;
-    reg [7:0]  addr_a, addr_b, data_b;
-    reg        flt, valid_b, low_at_start;
+    reg [7:0]  addr_a, addr_b, addr_w, data_b, data_w;
+    reg        flt, valid_b, valid_w, low_at_start;
     reg [2:0]  other;
-    reg [1:0]  ctl_a, ctl_b;
+    reg [1:0]  ctl_a, ctl_b, ctl_w;
 
     // The sender's queue as the chip presents it: the head stays until taken.
     reg [7:0]  queue [0:15];
@@ -36,7 +36,8 @@ module tb_uart_ind;
     uart_ind dut (.clk(clk), .BIT(BIT), .start(start), .unwritten(unwritten),
         .addr_a(addr_a), .addr_b(addr_b), .flt(flt), .other(other),
         .valid_a(valid_a), .valid_b(valid_b), .data_a(data_a), .data_b(data_b),
-        .ctl_a(ctl_a), .ctl_b(ctl_b));
+        .ctl_a(ctl_a), .ctl_b(ctl_b), .addr_w(addr_w), .valid_w(valid_w),
+        .data_w(data_w), .ctl_w(ctl_w));
 
     task noise;
         begin
@@ -46,6 +47,9 @@ module tb_uart_ind;
             data_b = $random(seed);
             ctl_a = $random(seed);
             ctl_b = $random(seed);
+            valid_w = $random(seed);
+            data_w = $random(seed);
+            ctl_w = $random(seed);
         end
     endtask
 
@@ -59,6 +63,7 @@ module tb_uart_ind;
         unwritten = $random(seed);
         addr_a = $random(seed);
         addr_b = $random(seed);
+        addr_w = $random(seed);
         noise;
         low_at_start = !flt;
     end
@@ -80,10 +85,15 @@ module tb_uart_ind;
                 count = count - 1;
             end
         end
+        if (dut.seen_w !== dut.push_b) begin     // the witness logs when the receiver stores
+            errors = errors + 1;
+            $display("MISMATCH witness logged %b, receiver stored %b", dut.seen_w, dut.push_b);
+        end
         if (dut.push_b) begin                    // the receiver stored a byte on this clock
-            if (owed_n == 0 || dut.pdata_b !== owed[0]) begin
+            if (owed_n == 0 || dut.pdata_b !== owed[0] || dut.pdata_w !== owed[0]) begin
                 errors = errors + 1;
-                $display("MISMATCH stored %h, owed %0d, oldest %h", dut.pdata_b, owed_n, owed[0]);
+                $display("MISMATCH stored %h, witness logged %h, owed %0d, oldest %h",
+                         dut.pdata_b, dut.pdata_w, owed_n, owed[0]);
             end
             for (i = 0; i < 3; i = i + 1) owed[i] = owed[i + 1];
             if (owed_n != 0) owed_n = owed_n - 1;

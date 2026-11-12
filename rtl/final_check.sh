@@ -13,7 +13,7 @@ echo "--- UART proof bugs"; echo "broke $(grep -c BROKE "$OUT/f_uart.txt")"; gre
 for t in d4 d3 stuffcover cover; do
     echo "--- $t"; timeout 300 bash prove_ind.sh $t 2>&1 | grep -E "DONE" | sed 's/.*\] *//' | cut -c1-40
 done
-echo "--- UART proof"; timeout 900 bash prove_uart.sh 2>&1 | grep -E "DONE" | sed 's/.*\] *//' | cut -c1-40
+echo "--- UART proof"; timeout 2400 bash prove_uart.sh 2>&1 | grep -E "DONE" | sed 's/.*\] *//' | cut -c1-40
 echo "--- UART harness simulation"; bash sim_uart.sh 2>&1 | tail -3
 L="$HOME/janus-tools/build/ind"
 echo "free cover reached: $(grep -cE "Reached cover" $L/lockstep_ind_cover/engine_0/logfile.txt)"

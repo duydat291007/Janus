@@ -38,12 +38,14 @@ was checked in simulation or by formal proof.
   and 1-Wire also at real 1 us timing using the prescaler.
 - The Verilog matches the Python model tick for tick, and clock for clock with
   the prescaler set.
-- One protocol is proven whole: UART. An unbounded proof runs the program
-  word for word on two real harts, for any bit time from 8 ticks, any bytes
+- One protocol is proven whole, in all three roles at once: UART. An
+  unbounded proof runs the program word for word on three real harts, a
+  sender, a receiver and a witness, for any bit time from 8 ticks, any bytes
   arriving at any time, any load address, and a line that reads anything
   while undriven. Every byte the receiver stores is the byte the sender took,
-  none is lost or invented, nothing is flagged, and a monitor that sees only
-  the wire reads exact 8N1 frames. Writing it exposed a start-up bug in the
+  the witness logs the same byte on the same tick, none is lost or invented,
+  nothing is flagged, and a monitor that sees only the wire reads exact 8N1
+  frames. Writing it exposed a start-up bug in the
   program, now fixed: on a pin that read low before the first frame, the
   sender could emit a byte nobody queued.
 - A second unbounded proof covers timed bits, `sync`, stuffing, CRC, NRZI,
