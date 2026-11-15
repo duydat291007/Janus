@@ -61,6 +61,11 @@ module janus_hart (
     output     [4:0]  dbg_width,
     output     [7:0]  dbg_viol,
     output     [7:0]  dbg_tx,
+    output     [111:0] dbg_cfg,
+    output     [47:0] dbg_cset,
+    output     [10:0] dbg_cnt,
+    output     [7:0]  dbg_rx1,
+    output     [3:0]  dbg_prev,
     output            dbg_clean
 `endif
 );
@@ -162,6 +167,14 @@ module janus_hart (
     assign dbg_width = c_width;
     assign dbg_viol = violations_r;
     assign dbg_tx = tx;
+    // For proofs of programs that use traps, clocked bits and a second lane.
+    assign dbg_cfg = {cfg6, cfg5, cfg4, cfg3, cfg2, cfg1, cfg0};
+    assign dbg_cset = {c_rs_en, c_rs_pin, c_lose, c_err, c_div, div_cnt, c_brk_en, c_brk,
+                       lf_valid, f_armed, faulty, c_clk, c_clk_own, c_cpol, c_cpha,
+                       c_l2_en, c_l2_pin, c_l2_own};
+    assign dbg_cnt = cnt;
+    assign dbg_rx1 = rx1;
+    assign dbg_prev = prev;
     // Everything the restricted program subset can never change from reset.
     assign dbg_clean = !c_rs_en && !lf_valid && c_lose == WITNESS
         && !c_l2_en && c_div == 0 && div_cnt == 0

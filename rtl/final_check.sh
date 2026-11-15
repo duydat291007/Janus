@@ -5,6 +5,7 @@ bash mutate_chip.sh > "$OUT/f_chip.txt" 2>&1 &
 bash mutate_rtl.sh > "$OUT/f_rtl.txt" 2>&1 &
 bash mutate_proof.sh > "$OUT/f_proof.txt" 2>&1 &
 bash mutate_uart.sh > "$OUT/f_uart.txt" 2>&1 &
+bash mutate_spi.sh > "$OUT/f_spi.txt" 2>&1 &
 wait
 echo "--- chip bugs"; echo "caught $(grep -c CAUGHT "$OUT/f_chip.txt")"; grep -vE "^CAUGHT" "$OUT/f_chip.txt" | cut -c1-80
 echo "--- hart bugs"; head -1 "$OUT/f_rtl.txt"; echo "caught $(grep -c CAUGHT "$OUT/f_rtl.txt")"; grep -vE "^CAUGHT|^baseline" "$OUT/f_rtl.txt" | cut -c1-80
@@ -13,6 +14,9 @@ echo "--- UART proof bugs"; echo "broke $(grep -c BROKE "$OUT/f_uart.txt")"; gre
 for t in d4 d3 stuffcover cover; do
     echo "--- $t"; timeout 300 bash prove_ind.sh $t 2>&1 | grep -E "DONE" | sed 's/.*\] *//' | cut -c1-40
 done
+echo "--- SPI proof bugs"; echo "broke $(grep -c BROKE "$OUT/f_spi.txt")"; grep -vE "^BROKE" "$OUT/f_spi.txt" | cut -c1-80
+echo "--- SPI proof"; timeout 900 bash prove_spi.sh 2>&1 | grep -E "DONE" | sed 's/.*\] *//' | cut -c1-40
+echo "--- SPI harness simulation"; bash sim_spi.sh 2>&1 | tail -3
 echo "--- UART proof"; timeout 2400 bash prove_uart.sh 2>&1 | grep -E "DONE" | sed 's/.*\] *//' | cut -c1-40
 echo "--- UART harness simulation"; bash sim_uart.sh 2>&1 | tail -3
 L="$HOME/janus-tools/build/ind"

@@ -1103,3 +1103,67 @@ starting with the line low, no failure.
 
 Limits that remain: all three harts start together and share one clock, bit
 times start at 8 ticks, and the other five protocols are not proven whole.
+
+### A second protocol proven whole: SPI
+
+`rtl/spi_ind.sv` proves the SPI program the way `uart_ind.sv` proves UART:
+the real program, taken from the assembler by `rtl/gen_spi_rom.py`, on two
+real harts. It covers what the UART program never uses: clocked bits, two
+data lines moving at once, a byte stream with no gap between bytes, and a
+trap.
+
+The target has no clock of its own. It follows each clock edge two ticks
+after the controller drives it, so the two are compared by where each stands
+in the clock cycle. When CS rises, the trap sends both to `idle` on the same
+tick and they are side by side again.
+
+Free: the half period, from 8 to 2047 ticks; the four modes; the load
+address; both queues; what the clock and data lines read while undriven, on
+every tick; and the unwritten program words.
+
+What it claims:
+
+- DATA. Each side stores the byte the other sent in that slot. The controller
+  never sends from an empty queue; the target sends FF when it has nothing.
+- WIRE. A monitor that sees only the four wires, and knows only the textbook
+  rules for the mode, reads those same bytes: most significant bit first,
+  eight bits a byte, each read on the edge the mode names, with both data
+  lines still across that edge. The clock moves only while CS is low, and a
+  transfer is whole bytes. Without this the proof would only say that the two
+  harts agree with each other.
+- CLEAN. No violations. The controller alone drives CS, the clock and MOSI;
+  the target alone drives MISO, and only during a transfer.
+- LIVE. Each hart rests only in a short list of states, and both are back at
+  `idle` together when CS has risen.
+
+Almost all of the invariants were found by simulating the harness first and
+reading the two harts' timeline off the trace. The proof then needed one
+more, and closes in under two minutes.
+
+It is not vacuous. 41 planted bugs each break it: 12 in the program, 21 in
+the hart, 2 that both harts share (swapped clock phases, and least
+significant bit first), 2 in the monitor's own rules and 4 that weaken its
+assumptions. The two shared bugs matter most: the harts still agree with
+each other under them. `rtl/sim_spi.sh` simulates the same harness on random
+inputs: 52 runs in all four modes at half periods from 8 to 2047, 2,972 bytes each way in 212 transfers over 9.5 million ticks, with a separate scoreboard, and no failure.
+
+Two findings:
+
+- **The target drops a queued byte when a transfer ends.** It takes its next
+  byte as each byte ends, before it knows whether the controller goes on. If
+  the controller stops there, that byte has left the queue and is never
+  sent. It happened in 106 of 212 simulated transfers. A fix needs
+  the hart to take the byte only when its first bit goes out, so it is
+  recorded as a limit, not fixed.
+- **A bouncing CS at start-up can cut the set-up short.** The trap watches CS
+  from the first tick. If an undriven CS rose before the controller drove
+  it, both harts would jump to `idle` with the mode not yet written. The
+  proof assumes an undriven CS holds one level, a pull-up or pull-down, and
+  fails within 12 ticks when that assumption is removed.
+
+One assumption turned out not to be needed and was removed: the target's
+queue may even lose entries.
+
+Limits: both harts start together and share one clock; half periods start at
+8 ticks; no witness; the queues, pin rotation and host port are outside it.
+The other four protocols are not proven whole.

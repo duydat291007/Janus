@@ -48,12 +48,19 @@ same. Everything below was checked in simulation or by formal proof.
   frames. Writing it exposed a start-up bug in the
   program, now fixed: on a pin that read low before the first frame, the
   sender could emit a byte nobody queued.
-- A second unbounded proof covers timed bits, `sync`, stuffing, CRC, NRZI,
+- A second protocol is proven whole: SPI, controller and target, in all four
+  modes, for any half period from 8 ticks. It covers what UART does not use:
+  clocked bits, two data lines at once, gapless byte streams and a trap. Each
+  side stores the byte the other sent, and a monitor that knows only the
+  textbook rules for the mode reads the same bytes off the wires. Limit: the
+  target takes its next byte ahead, so one queued byte is dropped if the
+  controller ends the transfer there.
+- A third unbounded proof covers timed bits, `sync`, stuffing, CRC, NRZI,
   the pin pair and break bits for every program in that subset: the two harts
   stay in step, the listener reads what the owner sent, and neither counts a
   violation the other does not. It does not cover the jump on a break, `set`,
   clocked bits, traps, `claim`, `choice`, `match`, arbitration, resync or
-  witnesses, so the other five protocols are not proven whole.
+  witnesses, so the other four protocols are not proven whole.
 - CAN has no error frames or automatic retransmission, so it must not be used on
   a shared CAN bus.
 - Low-speed USB was a hold-out test. It failed on the frozen instruction set and
@@ -92,6 +99,7 @@ bash run.sh replay
 bash div_replay.sh
 bash prove_ind.sh d4
 bash prove_uart.sh
+bash prove_spi.sh
 bash sim_uart.sh        # the UART proof's harness, simulated on random inputs
 bash final_check.sh     # every planted-bug set and proof task
 bash chip.sh synth
