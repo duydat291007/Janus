@@ -1167,3 +1167,28 @@ queue may even lose entries.
 Limits: both harts start together and share one clock; half periods start at
 8 ticks; no witness; the queues, pin rotation and host port are outside it.
 The other four protocols are not proven whole.
+
+### 1-Wire: a second transaction cleared the target's queue
+
+Found while building a proof harness for the 1-Wire program, before any
+invariant was written: the harness simulation showed the target losing
+arbitration, which 1-Wire does not have.
+
+When a read ends, the target moves on and waits to send the first bit of a
+next byte. If the controller starts a new reset instead, the target takes the
+falling edge for a read slot and drives its bit. A 1 on a line held low is
+what losing arbitration looks like, and the hart acted on it: it raised the
+lost flag and cleared the target's transmit queue. In the model, a target
+with bytes queued for the second transaction answered `FF`.
+
+Fix: the program now starts with `mode(lose_to=None)`. It is 30 instructions,
+was 29. The chip did not change. One loss remains and is a limit, as in SPI:
+the byte the target took ahead when the read ended is never sent.
+
+Checks: a new model test runs two transactions and a planted bug that leaves
+arbitration on is caught (9 tests, 5 of 5 planted bugs). The replay cannot
+fill a queue twice, so that case runs on the Verilog as a chip scenario
+instead, which checks the bytes and that no flag is raised. Replay 643 of 643
+at prescalers 0, 3 and 7; chip scenarios 68 of 68 with 917 byte checks.
+
+The proof itself is not written yet: only its harness and simulation exist.

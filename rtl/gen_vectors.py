@@ -88,7 +88,10 @@ def main():
     test_adversary.RECOVERY = False   # the testbench queues data once
     test_adversary.STEP = 6
     cases = [(n, f, a) for n, f, a in test_janus.TESTS]
-    cases += [(f.__name__, f, ()) for f in test_onewire.TESTS]
+    # One 1-Wire case fills a queue twice, which the replay cannot do. The
+    # chip scenario onewire_two_transactions runs it on the Verilog instead.
+    cases += [(f.__name__, f, ()) for f in test_onewire.TESTS
+              if f is not test_onewire.a_second_transaction_keeps_the_targets_queue]
     cases += [(f.__name__, f, ()) for f in test_can.TESTS]
     cases += [(f.__name__, f, ()) for f in test_usb.TESTS]
     cases += [(f.__name__, f, ()) for f in test_adversary.TESTS]

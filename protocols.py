@@ -117,6 +117,10 @@ def onewire(div=0):
     p = Prog("onewire", {"DQ": OPEN_DRAIN})
     if div:
         p.mode(div=div)
+    # 1-Wire has no arbitration. Without this, a target that is sending a 1
+    # when the controller starts the next reset would count as having lost
+    # the bus: its role, its queue and the lost flag would all change.
+    p.mode(lose_to=None)
     p.hold_trap("DQ", 0, 130, "suspect")  # longer than any legal slot
     p.hold_trap("DQ", 0, 300, "reset")
 

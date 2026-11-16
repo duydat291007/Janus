@@ -227,6 +227,31 @@ def quiet_start(out):
     s.write(os.path.join(out, "uart_quiet_start.hex"))
 
 
+def two_transactions(out):
+    """1-Wire twice over. When the second reset starts, the target is waiting
+    to send a read bit: it must not count that as a lost arbitration, and the
+    bytes queued for the second transaction must still be there."""
+    prog = p.onewire()
+    s = Script()
+    s.raw(PADS, 1)
+    s.load(prog)
+    s.setup(0, prog, "C", 0, None, 0)
+    s.setup(1, prog, "T", 0, None, 0)
+    s.push(1, [0x28, 0xC3, 0x55, 0x66])
+    s.push(0, [0x33, 0xFF])
+    s.run(1, 1, 1)
+    s.wait(4000 + MARGIN)
+    s.expect_rx(0, [0x00, 0x28])              # presence, then the byte read
+    s.push(0, [0x44, 0xFF])
+    s.wait(4000 + MARGIN)
+    s.expect_rx(1, [0x33, 0x44])
+    # 0xC3 was taken ahead when the first read ended, so 0x55 comes next.
+    s.expect_rx(0, [0x14, 0x55])
+    s.expect_status(0, 0, 0xFF, RX_EMPTY | TX_EMPTY)
+    s.expect_status(1, 0, 0xFF, RX_EMPTY | TX_EMPTY)   # and no arbitration lost
+    s.write(os.path.join(out, "onewire_two_transactions.hex"))
+
+
 def can_tx(can_id, data):
     return [(can_id >> 8) << 5, can_id & 0xFF, len(data) << 1, *data]
 
@@ -313,6 +338,8 @@ def main():
     counts["uart_pads_stuck"] = 0
     quiet_start(out)
     counts["uart_quiet_start"] = 2
+    two_transactions(out)
+    counts["onewire_two_transactions"] = 6
     for name, n in counts.items():
         print(name, n)
 

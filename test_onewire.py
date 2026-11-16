@@ -140,6 +140,27 @@ def witness_flags_a_held_low_line():
     assert w.violations >= 1, w.violations
 
 
+@case
+def a_second_transaction_keeps_the_targets_queue():
+    """While the target waits to send a read bit, the controller may start
+    the next reset. The target is then driving a 1 onto a low line, which is
+    legal here: it must not count as a lost arbitration, and the bytes it has
+    queued for the next transaction must survive."""
+    prog, bus = build()
+    c = Hart(prog, C, bus, tx=[CMD, 0xFF])
+    t = Hart(prog, T, bus, tx=[0x28, 0xC3, 0x55, 0x66])
+    bus.add(c, t)
+    bus.run(4000)
+    assert list(c.rx_q)[1:] == [0x28] and list(t.rx_q) == [CMD], (c.rx_q, t.rx_q)
+    c.tx_q.extend([0x44, 0xFF])
+    bus.run(4000)
+    # 0xC3 was taken ahead when the first read ended, so the next byte is 0x55.
+    assert list(c.rx_q)[3:] == [0x55] and list(t.rx_q) == [CMD, 0x44], (c.rx_q, t.rx_q)
+    assert not c.arb_lost and not t.arb_lost
+    assert (c.violations, t.violations) == (0, 0)
+    assert all(byte < 0x80 for byte in (c.rx_q[0], c.rx_q[2])), "presence not seen"
+
+
 def run_mutants():
     """Plant bugs and confirm these tests catch each one."""
     timed, branch = Hart._timed_bit, Hart._branch
@@ -161,8 +182,13 @@ def run_mutants():
     def no_width_traps():
         Prog.hold_trap = lambda *args: None
 
-    hold_trap = Prog.hold_trap
-    mutants = {"bit polarity inverted on both sides":
+    def arbitration_left_on():
+        mode = Prog.mode
+        Prog.mode = lambda self, **fields: None if "lose_to" in fields else mode(self, **fields)
+
+    hold_trap, prog_mode = Prog.hold_trap, Prog.mode
+    mutants = {"arbitration loss left on, as the program was": arbitration_left_on,
+               "bit polarity inverted on both sides":
                lambda: setattr(Hart, "_timed_bit", inverted_on_both_sides),
                "wrong input lag": lambda: setattr(janus, "SYNC_LAG", 1),
                "wrong slot count": lambda: setattr(Hart, "_branch", one_slot_short),
@@ -177,6 +203,7 @@ def run_mutants():
             except Exception:
                 failed.append(fn.__name__)
         Hart._timed_bit, Hart._branch, Prog.hold_trap = timed, branch, hold_trap
+        Prog.mode = prog_mode
         janus.SYNC_LAG = 2
         print(f"{'CAUGHT' if failed else 'SURVIVED':8} {name}: {failed}")
 
