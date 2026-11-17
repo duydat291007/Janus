@@ -52,7 +52,7 @@ def encode(prog, ins, base=0):
         return (word | pin_index(prog, a["pin"]) << 25 | ROLE[a["owner"]] << 23
                 | src << 21 | (a["n"] - 1) << 17 | a["sync"] << 16
                 | a["clocked"] << 15 | (a["stream"] or a["free"]) << 14
-                | a["brk"] << 13 | a["dwell"])
+                | a["brk"] << 13 | a["keep"] << 12 | a["dwell"])
     if op == "claim":
         other = a["otherwise"]
         return (word | pin_index(prog, a["pin"]) << 25 | ROLE[a["party"]] << 23
@@ -60,7 +60,8 @@ def encode(prog, ins, base=0):
     if op == "load":
         imm = a["imm"]
         assert imm is None or 0 <= imm < 256
-        return word | ROLE[a["party"]] << 26 | (imm is not None) << 25 | (imm or 0)
+        return (word | ROLE[a["party"]] << 26 | (imm is not None) << 25 | a["keep"] << 24
+                | (imm or 0))
     if op == "store":
         return word | ROLE[a["party"]] << 26 | a["lane"] << 25
     if op == "branch":

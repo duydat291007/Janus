@@ -13,8 +13,7 @@
 //   HALF        the half period, any value from MINHALF to 2047 ticks
 //   cpol, cpha  the four SPI modes
 //   start       the address the program is loaded at, 0 to 48
-//   valid, data both queues: any bytes, arriving at any time; the target's
-//               may even lose entries
+//   valid, data both queues: any bytes, arriving at any time
 //   flt         what SCK, MOSI and MISO read while undriven, on every tick
 //   flt_cs      what CS reads while undriven
 //   unwritten   what the other 48 program words hold
@@ -22,8 +21,8 @@
 // Assumed:
 //   - both harts leave reset on the same tick, with the program's one trap
 //     set, no prescaler and no adversary fault;
-//   - an entry in the controller's queue stays until the hart takes it, as
-//     in janus_fifo;
+//   - an entry stays at the head of its queue until the hart pops it, as in
+//     janus_fifo;
 //   - a pin is low if a hart drives it low, high if one drives it high, and
 //     reads its `flt` level otherwise. An undriven CS holds one level, a
 //     pull-up or a pull-down: the trap watches CS from the first tick, so a
@@ -35,7 +34,8 @@
 //          its queue for that slot, and every byte the controller stores is
 //          the byte the target sent in it: its queue's next byte, or FF when
 //          it had none. Stores alternate, one each way per byte, and the
-//          controller never sends from an empty queue.
+//          controller never sends from an empty queue. A transfer ends only
+//          when the controller's queue is empty.
 //   WIRE   a monitor that sees only the four wires, and knows only the
 //          textbook rules for the mode, reads those same bytes: most
 //          significant bit first, eight bits a byte, each bit read on the
@@ -49,9 +49,11 @@
 //          each clock edge two ticks after the controller drives it, and
 //          both harts are back at `idle` together when CS has risen.
 //
-// Not claimed: the target takes its next byte when a byte ends, before it
-// knows whether the controller goes on. If the controller stops there, that
-// byte has left the queue and is never sent.
+//   KEPT   no byte leaves either queue unsent. The target takes its next byte
+//          as a byte ends, before it knows whether the controller goes on,
+//          and so does the controller when it goes on; both keep it queued
+//          (`keep`) and pop it as its last bit goes out. A byte cut off when
+//          CS rises stays at the head of the queue for the next transfer.
 //
 // tb_spi_ind.v simulates this same module with SPI_SIM defined: the free
 // signals become inputs driven at random, and every assertion is checked once
@@ -102,6 +104,7 @@ module spi_ind (input clk);
     wire        last_c, last_t, mine_c, mine_t, val_c, val_t;
     wire        pop_c, pop_t, clear_c, clear_t, push_c, push_t, seen_c, seen_t, seen2_c, seen2_t;
     wire        lost_c, lost_t;
+    wire [3:0]  keep_c, keep_t;
 
     // Every pin is push-pull: a hart driving it low wins, one driving it high
     // sets it otherwise, and with no driver it reads its `flt` level.
@@ -130,7 +133,7 @@ module spi_ind (input clk);
         .dbg_val(val_c), .dbg_pin(pin_c), .dbg_s1(s1_c), .dbg_armed(armed_c),
         .dbg_code(code_c), .dbg_inserted(), .dbg_stuff_bit(), .dbg_width(),
         .dbg_viol(viol_c), .dbg_tx(tx_c), .dbg_cfg(cfg_c), .dbg_cset(cset_c),
-        .dbg_cnt(cnt_c), .dbg_rx1(rx1_c), .dbg_prev(prev_c), .dbg_clean());
+        .dbg_cnt(cnt_c), .dbg_rx1(rx1_c), .dbg_prev(prev_c), .dbg_keep(keep_c), .dbg_clean());
 
     janus_hart t (.clk(clk), .por(por), .rst(rst), .wire_in(bus), .oe(oe_t), .ov(ov_t),
         .od_mask(8'h00), .base_role(2'd1), .reset_pc(start), .addr_reg(addr_t), .pc(pc_t),
@@ -144,7 +147,7 @@ module spi_ind (input clk);
         .dbg_val(val_t), .dbg_pin(pin_t), .dbg_s1(s1_t), .dbg_armed(armed_t),
         .dbg_code(code_t), .dbg_inserted(), .dbg_stuff_bit(), .dbg_width(),
         .dbg_viol(viol_t), .dbg_tx(tx_t), .dbg_cfg(cfg_t), .dbg_cset(cset_t),
-        .dbg_cnt(cnt_t), .dbg_rx1(rx1_t), .dbg_prev(prev_t), .dbg_clean());
+        .dbg_cnt(cnt_t), .dbg_rx1(rx1_t), .dbg_prev(prev_t), .dbg_keep(keep_t), .dbg_clean());
 
     localparam S_BOOT = 4'd0, S_EXEC = 4'd1, S_CLAIM = 4'd2, S_SYNC = 4'd3, S_EDGE = 4'd4,
                S_MID = 4'd5, S_ENTER = 4'd8, S_GAP = 4'd9, S_TOP = 4'd10, S_AW = 4'd11,
@@ -186,8 +189,12 @@ module spi_ind (input clk);
     // each tick, and the assertions below tie them to the harts' outputs.
     reg [7:0]  cur_c = 0, done_c = 0, cur_t = 0;
     reg        owe = 0;          // the target has yet to store done_c
-    reg        vq_c = 0;
-    reg        took_c = 0, took_t = 0, ended_c = 0, ended_t = 0;
+    reg        vq_c = 0, vq_t = 0;
+    reg [7:0]  dq_c = 0, dq_t = 0;   // each queue's head one tick ago
+    reg        took_c = 0, ended_c = 0, ended_t = 0;
+    reg        kv_c = 0, kv_t = 0;   // the byte in hand is kept: it is still queued
+    reg [3:0]  kq_c = 0, kq_t = 0;   // each hart's keep count one tick ago
+    reg        trapped = 0;          // the CS trap fired on the last tick
     wire       c_loads = !rst && !trap && c_exec && at_c == PC_LOADC;
     wire       c_ends = !rst && !trap && c_gap && at_c == PC_DATA && k_c == 4'd7;
     wire       t_loads = !rst && !trap && t_exec && at_t == PC_LOADT;
@@ -221,8 +228,13 @@ module spi_ind (input clk);
 
     always @(posedge clk) begin
         vq_c <= valid_c;
-        took_c <= (c_loads || c_ends) && valid_c;
-        took_t <= (t_loads || t_ends) && valid_t;
+        vq_t <= valid_t;
+        dq_c <= data_c;
+        dq_t <= data_t;
+        took_c <= c_loads && valid_c;    // the controller's first byte is popped at once
+        kq_c <= keep_c;
+        kq_t <= keep_t;
+        trapped <= !rst && trap;
         ended_c <= c_ends;
         ended_t <= t_ends;
         if (rst) begin
@@ -230,12 +242,18 @@ module spi_ind (input clk);
             done_c <= 0;
             cur_t <= 0;
             owe <= 0;
+            kv_c <= 0;
+            kv_t <= 0;
         end else begin
             if (c_ends) done_c <= cur_c;
             if (c_loads || (c_ends && valid_c)) cur_c <= valid_c ? data_c : 8'hFF;
             if (c_ends) owe <= 1'b1;
             else if (t_ends) owe <= 1'b0;
             if (t_loads || t_ends) cur_t <= valid_t ? data_t : 8'hFF;
+            // Kept bytes: the target's every byte, the controller's refills.
+            if (c_loads) kv_c <= 1'b0;
+            else if (c_ends && valid_c) kv_c <= 1'b1;
+            if (t_loads || t_ends) kv_t <= valid_t;
         end
     end
 
@@ -246,9 +264,9 @@ module spi_ind (input clk);
 `endif
         assume (HALF >= MINHALF);
         assume (start <= MAX_START);
-        // The controller's queue: an entry stays until the hart takes it. The
-        // target needs no such promise: with nothing queued it sends FF.
-        if (vq_c && !pop_c) assume (valid_c);
+        // Each queue: the entry at its head stays until the hart pops it.
+        if (vq_c && !pop_c) assume (valid_c && data_c == dq_c);
+        if (vq_t && !pop_t) assume (valid_t && data_t == dq_t);
 
         assert (step <= 2'd2);
         if (!rst) begin
@@ -264,10 +282,25 @@ module spi_ind (input clk);
             // The byte that let the controller leave the claim is still there.
             if (at_c == PC_SELECT || at_c == PC_LOADC) assert (vq_c && !pop_c);
             if (c_ends) assert (!owe);           // the target stored the byte before
+            // A transfer ends only when the controller has nothing left to send.
+            if (at_c == PC_DESELECT && c_exec) assert (!vq_c);
             if (t_ends) assert (owe);            // and stores only a byte it is owed
             if (push_t) assert (pdata_t == done_c);
             if (push_c) assert (pdata_c == cur_t);
-            assert (pop_c == took_c && pop_t == took_t);
+            // A kept byte is popped exactly when its last bit goes out: its
+            // keep count runs from 1 to 0 on a tick with no trap.
+            assert (pop_c == (took_c || (kq_c == 4'd1 && keep_c == 0 && vq_c && !trapped)));
+            assert (pop_t == (kq_t == 4'd1 && keep_t == 0 && vq_t && !trapped));
+
+            // KEPT: the keep count is the bits of the kept byte still to go.
+            assert (keep_c == (c_run && kv_c ? 4'd8 - out_c : 4'd0));
+            // The controller's first byte comes from an ordinary load, never kept.
+            if (at_c == PC_LOADT || (at_c == PC_DATA && !c_run)) assert (!kv_c);
+            assert (keep_t == ((t_run || (at_t == PC_DATA && t_exec)) && kv_t
+                               ? 4'd8 - (t_run ? out_t : 4'd0) : 4'd0));
+            // While a byte is kept, it is the head of its queue.
+            if (keep_c != 0) assert (vq_c && dq_c == cur_c);
+            if (keep_t != 0) assert (vq_t && dq_t == cur_t);
             assert (push_c == ended_c && push_t == ended_t);
 
             // WIRE: what the monitor is about to read.

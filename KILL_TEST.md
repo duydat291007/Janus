@@ -1314,3 +1314,67 @@ reset of 523, presence 31 ticks after the reset and under 80 long. Each
 breaks the proof. The harness simulation: 20 runs, 50 transactions,
 50 bytes written and 750 read over 626,058 ticks, no failure. Model tests 9
 of 9.
+
+### Fix: a byte the target took ahead was lost
+
+The SPI and 1-Wire proofs both recorded the same limit. A target takes its
+next byte before it knows it will send it: in SPI as each byte ends, before
+it knows whether the controller goes on; in 1-Wire when a read ends, before
+it knows whether another read slot comes. If the controller stops instead,
+the byte has already left the queue and is never sent. In the SPI harness
+simulation this happened in 106 of 212 transfers.
+
+The fix is a new instruction flag, `keep`, on `load` (bit 24) and on a
+clocked stream's refills (bit 12). A byte taken with it is copied but stays
+at the head of the queue, and leaves as its last bit goes out. A trap, an
+arbitration loss or another load before then drops the copy, and the byte
+is sent next time. In the hart it is a 4-bit count of the bits still to go.
+A flag and not a new rule for every load, because one load needs the old
+behaviour: the 1-Wire controller takes a read token it never sends, and the
+token must leave the queue at once.
+
+The SPI program now has the target load with `keep` and the stream refill
+with `keep`; the 1-Wire program has the target's read load with `keep`.
+
+The two proofs now claim it (KEPT): a kept byte is popped exactly when its
+keep count runs from 1 to 0 on a tick with no trap, the count is always the
+bits of the byte still to go, and while a byte is kept it is the head of its
+queue. Together: no byte leaves a queue unsent. For this they now assume
+what janus_fifo already does, that the head of each queue stays until it is
+popped. The SPI proof first allowed the target's queue to lose entries at
+random; that freedom had to go, since a byte that vanishes on its own cannot
+be kept.
+
+Writing the SPI claim needed one more invariant: the controller's first
+byte comes from an ordinary load, so it is never kept. Both proofs close.
+
+The new count also broke the UART proof at first, though UART never uses
+`keep`. The solver may start any register at any value, and nothing said the
+count was 0, so a phantom kept byte could pop the queue at a random tick.
+The proof now states that no hart ever holds a kept byte, and closes again.
+The lockstep proof needed nothing: it leaves the pops unconnected.
+
+One SPI planted bug survived the change: a controller that ends every
+transfer after one byte. Before, only its odd queue pops gave it away. With
+`keep` the unsent bytes stay queued and go out one per transfer, all
+correct, and nothing the proof claimed ruled that out. It now claims what
+streaming means: a transfer ends only when the controller's queue is empty.
+The bug breaks the proof again.
+
+Checks: two new model tests, an SPI case in all four modes and the 1-Wire
+two-transaction test, each fail on the old model and pass on the new. The
+Verilog replay compares the changed hart with the changed model tick for
+tick: 643 of 643 at prescalers 0, 3 and 7. The replay fills each queue once,
+so two chip scenarios run the cases that refill it: `spi_two_transfers`, and
+`onewire_two_transactions`, now with a third transaction that reads the
+next queued byte. 69 of 69 chip scenarios, 938 byte checks. The SPI harness
+simulation now finds no byte taken ahead and dropped, in 213 transfers.
+Eleven new planted bugs each break their proof: a kept byte popped at once,
+popped one bit early, never popped, kept through a trap, a refill that
+ignores the flag, and each program without the flag. One older SPI bug now
+survives, as it should: it removes the pop from the ordinary refill, which
+the SPI program no longer uses.
+
+Cost at synthesis: 8 flip-flops, a 4-bit count in each hart, and 348 cells
+in all, 0.55 % of the area (317,478 to 319,235 square micrometres). Lint
+gives the same warnings as before, none of them about the new code.

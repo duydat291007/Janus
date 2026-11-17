@@ -67,6 +67,7 @@ module janus_hart (
     output     [7:0]  dbg_rx1,
     output     [3:0]  dbg_prev,
     output     [31:0] dbg_held,
+    output     [3:0]  dbg_keep,
     output            dbg_clean
 `endif
 );
@@ -95,6 +96,7 @@ module janus_hart (
     wire        i_clkd  = ins[15];
     wire        i_strm  = ins[14];     // clocked: stream. timed: free, no check
     wire        i_brk   = ins[13];     // timed: a break, the pin and its pair low
+    wire        i_keep  = ins[12];     // clocked stream: refills keep their byte queued
     wire [10:0] i_dwell = ins[10:0];
     wire [1:0]  i_party = ins[27:26];
 
@@ -126,6 +128,7 @@ module janus_hart (
     reg [3:0]  armed;                  // pin levels when last sampled
     reg [1:0]  role;
     reg [7:0]  tx, rx0, rx1, count;
+    reg [3:0]  keep_n;                 // bits of a kept byte still to go before it is popped
     reg        last, seen, val, cur_mine, inserted, stuff_bit, run_valid, run_val;
     reg [3:0]  k, run_len;
     reg        partial;                // inside a frame, past its first bit
@@ -177,6 +180,7 @@ module janus_hart (
     assign dbg_rx1 = rx1;
     assign dbg_prev = prev;
     assign dbg_held = {held1, held0};
+    assign dbg_keep = keep_n;
     // Everything the restricted program subset can never change from reset.
     assign dbg_clean = !c_rs_en && !lf_valid && c_lose == WITNESS
         && !c_l2_en && c_div == 0 && div_cnt == 0
@@ -241,6 +245,7 @@ module janus_hart (
             armed = pin;
             pc_r = target;
             s = S_EXEC;
+            keep_n = 0;                // a kept byte cut off here stays queued
             fired = 1'b1;
         end
     endtask
@@ -257,6 +262,10 @@ module janus_hart (
         begin
             if (c_msb) begin val = tx[7]; tx = {tx[6:0], 1'b0}; end
             else       begin val = tx[0]; tx = {1'b0, tx[7:1]}; end
+            if (keep_n != 0) begin
+                keep_n = keep_n - 1'b1;
+                if (keep_n == 0 && tx_valid) tx_pop_r = 1'b1;  // its last bit is out
+            end
         end
     endtask
 
@@ -273,6 +282,7 @@ module janus_hart (
             role = c_lose;
             arb_lost_r = 1'b1;
             tx_clear_r = 1'b1;
+            keep_n = 0;
             put_release(p);
             if (also) release_pin(p2);
         end
@@ -370,9 +380,11 @@ module janus_hart (
     task refill;
         begin
             if (is_mine(i_owner, role) || (c_l2_en && is_mine(c_l2_own, role))) begin
+                keep_n = 0;
                 if (tx_valid) begin
                     tx = tx_data;
-                    tx_pop_r = 1'b1;
+                    if (i_keep) keep_n = 4'd8;
+                    else tx_pop_r = 1'b1;
                 end else tx = 8'hFF;
             end
         end
@@ -423,7 +435,7 @@ module janus_hart (
         tx_pop_r = 0; tx_clear_r = 0; rx_push_r = 0;
         seen_push_r = 0; seen_push2_r = 0; arb_lost_r = 0;
         s = S_BOOT; s1 = 0; pin = 0; prev = 0; armed = 0; role = 0;
-        tx = 0; rx0 = 0; rx1 = 0; count = 0;
+        tx = 0; rx0 = 0; rx1 = 0; count = 0; keep_n = 0;
         last = 0; seen = 0; val = 0; cur_mine = 0;
         inserted = 0; stuff_bit = 0; run_valid = 0; run_val = 0;
         k = 0; run_len = 0; partial = 0; src_eff = 0;
@@ -454,7 +466,7 @@ module janus_hart (
             pin = wire_in[3:0];
             armed = wire_in[3:0];
             role = base_role;
-            tx = 0; rx0 = 0; rx1 = 0; count = 0; last = 0; k = 0;
+            tx = 0; rx0 = 0; rx1 = 0; count = 0; last = 0; k = 0; keep_n = 0;
             partial = 0; violations_r = 0; arb_lost_r = 0;
             now = 0; edge_t = 0; lf_valid = 0; last_fall = 0;
             crc = 0; run_len = 0; run_valid = 0; run_val = 0;
@@ -546,10 +558,13 @@ module janus_hart (
                             OP_CLAIM: s = S_CLAIM;
                             OP_LOAD: begin
                                 if (is_mine(i_party, role)) begin
+                                    keep_n = 0;
                                     if (ins[25]) tx = ins[7:0];
                                     else if (tx_valid) begin
                                         tx = tx_data;
-                                        tx_pop_r = 1'b1;
+                                        // keep: the byte leaves the queue with its last bit
+                                        if (ins[24]) keep_n = 4'd8;
+                                        else tx_pop_r = 1'b1;
                                     end else tx = 8'hFF;
                                 end
                                 pc_r = pc_r + 1'b1;

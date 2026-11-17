@@ -245,11 +245,43 @@ def two_transactions(out):
     s.push(0, [0x44, 0xFF])
     s.wait(4000 + MARGIN)
     s.expect_rx(1, [0x33, 0x44])
-    # 0xC3 was taken ahead when the first read ended, so 0x55 comes next.
-    s.expect_rx(0, [0x14, 0x55])
+    # The target loaded 0xC3 when the first read ended, and kept it queued
+    # when the reset came instead of a read slot, so 0xC3 is read now.
+    s.expect_rx(0, [0x14, 0xC3])
     s.expect_status(0, 0, 0xFF, RX_EMPTY | TX_EMPTY)
-    s.expect_status(1, 0, 0xFF, RX_EMPTY | TX_EMPTY)   # and no arbitration lost
+    s.expect_status(1, 0, 0xFF, RX_EMPTY)   # 0x55 and 0x66 still queued, no arbitration lost
+    s.push(0, [0x99, 0xFF])                 # a third transaction reads the next one
+    s.wait(4000 + MARGIN)
+    s.expect_rx(1, [0x99])
+    s.expect_rx(0, [0x61, 0x55])            # the presence byte holds older bits
+    s.expect_status(0, 0, 0xFF, RX_EMPTY | TX_EMPTY)
+    s.expect_status(1, 0, 0xFF, RX_EMPTY)   # 0x66 still queued
     s.write(os.path.join(out, "onewire_two_transactions.hex"))
+
+
+def spi_two_transfers(out):
+    """SPI twice, one byte each. As the first byte ends the target takes its
+    next one, before it knows the controller goes on. CS rises instead, so
+    that byte must stay queued and be the one the second transfer sends."""
+    prog = p.spi(10)
+    s = Script()
+    s.raw(PADS, 1)
+    s.load(prog)
+    s.setup(0, prog, "C", 0, None, 0)
+    s.setup(1, prog, "T", 0, None, 0)
+    s.push(1, [0xDE, 0xAD, 0xBE])
+    s.push(0, [0x12])
+    s.run(1, 1, 1)
+    s.wait(400 + MARGIN)
+    s.expect_rx(0, [0xDE])
+    s.expect_rx(1, [0x12])
+    s.push(0, [0x34])
+    s.wait(400 + MARGIN)
+    s.expect_rx(0, [0xAD])
+    s.expect_rx(1, [0x34])
+    s.expect_status(0, 0, 0xFF, RX_EMPTY | TX_EMPTY)
+    s.expect_status(1, 0, 0xFF, RX_EMPTY)   # 0xBE still queued
+    s.write(os.path.join(out, "spi_two_transfers.hex"))
 
 
 def can_tx(can_id, data):
@@ -339,7 +371,9 @@ def main():
     quiet_start(out)
     counts["uart_quiet_start"] = 2
     two_transactions(out)
-    counts["onewire_two_transactions"] = 6
+    counts["onewire_two_transactions"] = 9
+    spi_two_transfers(out)
+    counts["spi_two_transfers"] = 4
     for name, n in counts.items():
         print(name, n)
 

@@ -40,8 +40,11 @@ def spi(half, cpol=0, cpha=0):
     p.claim(C, "CS")
     p.step("CS", C, 0, half, sync=True)
     p.load(C)
-    p.load(T)
-    p.clocked("MOSI", C, 8, half, stream=True)
+    # The target keeps each byte queued until its last bit is out. It takes
+    # the next byte as one ends, before it knows the controller goes on; if
+    # CS rises instead, the byte stays queued for the next transfer.
+    p.load(T, keep=True)
+    p.clocked("MOSI", C, 8, half, stream=True, keep=True)
     p.step("CS", C, 1, half)  # the CS trap returns everyone to idle
     p.jump("idle")
     return p
@@ -164,7 +167,9 @@ def onewire(div=0):
     p.label("read_byte")
     p.choice(C, [None], "idle")
     p.load(C)
-    p.load(T)
+    # The target loads before it knows a read slot is coming. If a reset
+    # comes instead, its byte stays queued for the next transaction.
+    p.load(T, keep=True)
     p.counter(8)
     p.label("read_slot")
     p.step("DQ", C, 0, 6, sync=True)

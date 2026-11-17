@@ -45,7 +45,7 @@ mutant "controller stores the written byte" rom 's/32.h44000000/32\x27h40000000/
 mutant "target stores the byte read" rom '/6.d28:/ s/32.h40000000/32\x27h44000000/'
 mutant "reads go on with no token" rom 's/32.h62000001/32\x27h60000001/'
 mutant "read token never taken" rom '/6.d21:/ s/32.h30000000/32\x27h9F800000/'
-mutant "target never loads the byte to read" rom 's/32.h34000000/32\x27h9F800000/'
+mutant "target never loads the byte to read" rom 's/32.h35000000/32\x27h9F800000/'
 
 # Timings changed in the program itself, word and step length together, so
 # the proof's own formulas follow them. Only the textbook rules can object.
@@ -60,6 +60,12 @@ mutant "claim ignores a falling line" hart 's/if ((base_role == i_owner \&\& tx_
 mutant "claim does not wait for a byte" hart 's/if ((base_role == i_owner \&\& tx_valid) || !pin\[i_pin\]) begin/if (base_role == i_owner || !pin[i_pin]) begin/'
 mutant "sync input lag wrong" hart 's/edge_t = now - 12.d2;/edge_t = now - 12\x27d1;/'
 mutant "load takes a wrong byte" hart '/OP_LOAD: begin/,/OP_STORE: begin/ s/tx = tx_data;/tx = tx_data ^ 8\x27h01;/'
+
+# Keep: a byte taken with keep leaves the queue only with its last bit.
+mutant "a kept load is popped at once" hart 's/if (ins\[24\]) keep_n = 4.d8;/if (ins[24]) tx_pop_r = 1\x27b1;/'
+mutant "a kept byte is popped one bit early" hart 's/if (keep_n == 0 \&\& tx_valid) tx_pop_r = 1.b1;/if (keep_n == 1 \&\& tx_valid) tx_pop_r = 1\x27b1;/'
+mutant "a trap does not drop a kept byte" hart '/task fire/,/endtask/ s/keep_n = 0; .*$//'
+mutant "the target loads without keep" rom 's/32.h35000000/32\x27h34000000/'
 mutant "every hart thinks the bit is its own" hart 's/cur_mine = is_mine(i_owner, role);/cur_mine = 1;/'
 mutant "hold counter never restarts" hart 's/end else held0 = 0;/end/'
 mutant "hold trap fires one tick late" hart 's/if (held0 == cfg4) begin/if (held0 == cfg4 + 1\x27b1) begin/'

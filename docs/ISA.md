@@ -96,6 +96,7 @@ If the owner is mine, apply it. Takes one tick.
 | 15 | `clocked`: timed by the clock pin set in `mode`, dwell is the half period |
 | 14 | timed: `free` (listeners do not check a constant). Clocked: `stream` |
 | 13 | timed: `brk`, a break bit |
+| 12 | clocked with `stream`: `keep`, each refill keeps its byte queued (see `load`) |
 | 10:0 | dwell, in ticks (timed: bit time; clocked: half period) |
 
 - **Owner:** drives each bit. From the transmit byte (shifted by `msb`), the
@@ -127,7 +128,9 @@ If the owner is mine, apply it. Takes one tick.
 - **Clocked bits:** the clock owner drives the clock pin; everyone shifts data
   on the clock edges selected by `cpol` and `cpha`. A second data lane is
   available through `lane2`. `stream` refills and stores between bytes without
-  a gap, and only the clock owner decides to stop.
+  a gap, and only the clock owner decides to stop. With `keep`, a refill
+  leaves its byte in the queue until the byte's last bit is out, so a party
+  that follows the clock loses nothing when the clock owner stops.
 
 ### claim: wait for the bus
 
@@ -155,10 +158,17 @@ first `sync` bit, which is what a `sync` wait compares against.
 |---|---|
 | 27:26 | party |
 | 25 | from the instruction instead of the queue |
+| 24 | `keep`: the byte stays queued until its last bit is out |
 | 7:0 | immediate byte |
 
 If the party is mine: take the next queue entry (0xFF if the queue is empty),
 or the immediate byte.
+
+With `keep`, the entry is copied but stays at the head of the queue, and
+leaves it as its eighth bit is sent. A trap, an arbitration loss or another
+load before then drops the copy and leaves the entry queued, to be sent
+next time. A party that has to load before it knows it will send, such as
+a target ahead of a read slot or of the next SPI byte, loses nothing.
 
 ### store: hand a byte to the host
 

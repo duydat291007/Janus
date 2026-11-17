@@ -204,6 +204,26 @@ def test_spi_janus_target_against_reference_controller(cpol, cpha):
     assert list(t.rx_q) == MOSI_DATA, t.rx_q
 
 
+@case(*MODES)
+def test_spi_target_keeps_the_byte_a_transfer_did_not_take(cpol, cpha):
+    """Two transfers of one byte each. When a byte ends the target takes its
+    next one before it knows the controller goes on. CS rises instead, so
+    that byte must stay queued and be the one the second transfer reads."""
+    prog = spi(SPI_HALF, cpol, cpha)
+    bus = Bus(prog.pins)
+    c = Hart(prog, C, bus, tx=[0x12])
+    t = Hart(prog, T, bus, tx=[0xDE, 0xAD, 0xBE])
+    bus.add(c, t)
+    bus.run(SPI_HALF * 40)
+    assert list(c.rx_q) == [0xDE] and list(t.rx_q) == [0x12], (c.rx_q, t.rx_q)
+    assert list(t.tx_q) == [0xAD, 0xBE], t.tx_q
+    c.tx_q.append(0x34)
+    bus.run(SPI_HALF * 40)
+    assert list(c.rx_q) == [0xDE, 0xAD] and list(t.rx_q) == [0x12, 0x34], (c.rx_q, t.rx_q)
+    assert list(t.tx_q) == [0xBE], t.tx_q
+    assert (c.violations, t.violations) == (0, 0)
+
+
 @case()
 def test_spi_witness_flags_cs_rising_mid_byte():
     prog = spi(SPI_HALF)

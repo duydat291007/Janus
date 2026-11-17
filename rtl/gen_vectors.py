@@ -87,9 +87,11 @@ def main():
     test_usb.TRIALS, test_usb.RANDOM_PAYLOADS = 30, 5   # keeps the replay short
     test_adversary.RECOVERY = False   # the testbench queues data once
     test_adversary.STEP = 6
-    cases = [(n, f, a) for n, f, a in test_janus.TESTS]
-    # One 1-Wire case fills a queue twice, which the replay cannot do. The
-    # chip scenario onewire_two_transactions runs it on the Verilog instead.
+    # Two cases fill a queue twice, which the replay cannot do. The chip
+    # scenarios spi_two_transfers and onewire_two_transactions run them on the
+    # Verilog instead.
+    cases = [(n, f, a) for n, f, a in test_janus.TESTS
+             if f is not test_janus.test_spi_target_keeps_the_byte_a_transfer_did_not_take]
     cases += [(f.__name__, f, ()) for f in test_onewire.TESTS
               if f is not test_onewire.a_second_transaction_keeps_the_targets_queue]
     cases += [(f.__name__, f, ()) for f in test_can.TESTS]

@@ -31,13 +31,13 @@ mutant() {
 mutant "clock polarity never set" rom '/6.d3:/ s/ | cpol//'
 mutant "clock phase never set" rom '/6.d4:/ s/ | cpha//'
 mutant "clock idles at the wrong level" rom '/6.d7:/ s/{cpol, 21.d0}/{!cpol, 21\x27d0}/'
-mutant "seven bits a byte" rom 's/32.h140EC000/32\x27h140CC000/'
-mutant "no stream: the transfer ends after one byte" rom 's/32.h140EC000/32\x27h140E8000/'
+mutant "seven bits a byte" rom 's/32.h140ED000/32\x27h140CD000/'
+mutant "no stream: the transfer ends after one byte" rom 's/32.h140ED000/32\x27h140E9000/'
 mutant "target sends on the MOSI pin" rom 's/32.h9580002D/32\x27h95800029/'
 mutant "MISO never released" rom 's/32.h07400000/32\x27h90000001/'
 mutant "no claim: the controller does not wait for a byte" rom 's/32.h20000000/32\x27h90000001/'
 mutant "select does not sync the target" rom 's/32.h10410000/32\x27h10400000/'
-mutant "target never loads its byte" rom 's/32.h34000000/32\x27h90000001/'
+mutant "target never loads its byte" rom 's/32.h35000000/32\x27h90000001/'
 mutant "trap sends the harts to the wrong word" rom 's/16.h9020/16\x27h9220/'
 mutant "no trap on CS" rom 's/16.h9020/16\x27h1020/'
 
@@ -51,7 +51,9 @@ mutant "second lane shifts the other way" hart 's/if (lane) rx1 = c_msb ? {rx1\[
 mutant "second lane read from the first lane pin" hart 's/sample_lane(1.b1, c_l2_pin, c_l2_own);/sample_lane(1\x27b1, i_pin, c_l2_own);/'
 mutant "controller stores the wrong lane" hart 's/push_data_r = rx1;/push_data_r = rx0;/'
 mutant "target stores nothing at a byte end" hart 's/else rx_push_r = 1.b1;/else rx_push_r = 0;/'
-mutant "refill leaves the entry in the queue" hart '/task refill;/,/endtask/ s/tx_pop_r = 1.b1;//'
+# The stream refills with keep, so the ordinary refill pop never runs here.
+mutant "refill leaves the entry in the queue (expected to survive: SPI refills with keep)" hart '/task refill;/,/endtask/ s/tx_pop_r = 1.b1;/;/'
+mutant "a kept byte is never popped" hart 's/if (keep_n == 0 \&\& tx_valid) tx_pop_r = 1.b1;/;/'
 mutant "stream ends with a byte still queued" hart 's/if (is_mine(c_clk_own, role) \&\& !tx_valid) finish;/if (is_mine(c_clk_own, role)) finish;/'
 mutant "trap fires on a level, not an edge" hart 's/prev\[tw\[7:6\]\] != tw\[5\] \&\& //'
 mutant "trap does not rearm the sync" hart '/task fire/,/endtask/ s/armed = pin;//'
@@ -64,6 +66,14 @@ mutant "every hart thinks the bit is its own" hart 's/cur_mine = is_mine(i_owner
 mutant "sync input lag wrong" hart 's/edge_t = now - 12.d2;/edge_t = now - 12\x27d1;/'
 mutant "load takes a wrong byte" hart '/OP_LOAD: begin/,/OP_STORE: begin/ s/tx = tx_data;/tx = tx_data ^ 8\x27h01;/'
 
+# Keep: a byte taken with keep leaves the queue only with its last bit.
+mutant "a kept load is popped at once" hart 's/if (ins\[24\]) keep_n = 4.d8;/if (ins[24]) tx_pop_r = 1\x27b1;/'
+mutant "a stream refill ignores keep" hart 's/if (i_keep) keep_n = 4.d8;/if (1\x27b0) keep_n = 4\x27d8;/'
+mutant "a kept byte is popped one bit early" hart 's/if (keep_n == 0 \&\& tx_valid) tx_pop_r = 1.b1;/if (keep_n == 1 \&\& tx_valid) tx_pop_r = 1\x27b1;/'
+mutant "a trap does not drop a kept byte" hart '/task fire/,/endtask/ s/keep_n = 0; .*$//'
+mutant "the target loads without keep" rom 's/32.h35000000/32\x27h34000000/'
+mutant "the stream refills without keep" rom 's/32.h140ED000/32\x27h140EC000/'
+
 # Bugs both harts share. They still agree with each other, so only the
 # textbook rules can tell.
 mutant "both harts swap the two clock phases" hart 's/if (c_cpha) sample_lanes;/if (X) sample_lanes;/; s/if (!c_cpha) sample_lanes;/if (c_cpha) sample_lanes;/; s/if (X) sample_lanes;/if (!c_cpha) sample_lanes;/; s/if (!c_cpha) lanes_out;/if (c_cpha) lanes_out;/'
@@ -74,7 +84,8 @@ mutant "monitor reads on the other clock edge" proof 's/bus\[1\] == (cpha ? cpol
 mutant "monitor counts seven bits a byte" proof 's/if (m_n == 3.d7) assert/if (m_n == 3\x27d6) assert/'
 
 # The proof's own assumptions: without each, it must fail.
-mutant "a controller queue entry may vanish" proof 's/if (vq_c \&\& !pop_c) assume (valid_c);//'
+mutant "a controller queue entry may vanish" proof 's/if (vq_c \&\& !pop_c) assume (valid_c \&\& data_c == dq_c);//'
+mutant "a target queue entry may vanish" proof 's/if (vq_t \&\& !pop_t) assume (valid_t \&\& data_t == dq_t);//'
 mutant "half periods below 8 ticks allowed" proof 's/assume (HALF >= MINHALF);/assume (HALF >= 11\x27d4);/'
 mutant "an undriven CS may bounce" proof 's/(\* anyconst \*) wire        flt_cs;/(* anyseq *) wire flt_cs;/'
 mutant "program loaded past the end of memory" proof 's/assume (start <= MAX_START);//'

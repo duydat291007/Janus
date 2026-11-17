@@ -104,6 +104,7 @@ module uart_ind (input clk);
     wire [11:0] now_w, edge_w;
     wire [1:0]  role_w, src_w;
     wire        last_w, mine_w, val_w, clean_w;
+    wire [3:0]  keep_a, keep_b, keep_w;
     wire        pop_w, clear_w, push_w, seen_w, seen2_w, lost_w;
 
     // TX is push-pull: a hart driving it low wins, one driving it high sets
@@ -129,7 +130,7 @@ module uart_ind (input clk);
         .dbg_partial(partial_a), .dbg_role(role_a), .dbg_src(src_a), .dbg_mine(mine_a),
         .dbg_val(val_a), .dbg_pin(pin_a), .dbg_s1(s1_a), .dbg_armed(armed_a),
         .dbg_code(code_a), .dbg_inserted(), .dbg_stuff_bit(), .dbg_width(),
-        .dbg_viol(viol_a), .dbg_tx(tx_a), .dbg_clean(clean_a));
+        .dbg_viol(viol_a), .dbg_tx(tx_a), .dbg_keep(keep_a), .dbg_clean(clean_a));
 
     janus_hart b (.clk(clk), .por(por), .rst(rst), .wire_in(bus), .oe(oe_b), .ov(ov_b),
         .od_mask(8'h00), .base_role(2'd1), .reset_pc(start), .addr_reg(addr_b), .pc(pc_b),
@@ -142,7 +143,7 @@ module uart_ind (input clk);
         .dbg_partial(partial_b), .dbg_role(role_b), .dbg_src(src_b), .dbg_mine(mine_b),
         .dbg_val(val_b), .dbg_pin(pin_b), .dbg_s1(s1_b), .dbg_armed(armed_b),
         .dbg_code(code_b), .dbg_inserted(), .dbg_stuff_bit(), .dbg_width(),
-        .dbg_viol(viol_b), .dbg_tx(tx_b), .dbg_clean(clean_b));
+        .dbg_viol(viol_b), .dbg_tx(tx_b), .dbg_keep(keep_b), .dbg_clean(clean_b));
 
     wire [31:0] ins_w = uart_word(pc_w - start, BIT, start, unwritten);
 
@@ -157,7 +158,7 @@ module uart_ind (input clk);
         .dbg_partial(partial_w), .dbg_role(role_w), .dbg_src(src_w), .dbg_mine(mine_w),
         .dbg_val(val_w), .dbg_pin(pin_w), .dbg_s1(s1_w), .dbg_armed(armed_w),
         .dbg_code(code_w), .dbg_inserted(), .dbg_stuff_bit(), .dbg_width(),
-        .dbg_viol(viol_w), .dbg_tx(), .dbg_clean(clean_w));
+        .dbg_viol(viol_w), .dbg_tx(), .dbg_keep(keep_w), .dbg_clean(clean_w));
 
     localparam S_BOOT = 4'd0, S_EXEC = 4'd1, S_CLAIM = 4'd2, S_EDGE = 4'd4, S_MID = 4'd5;
 
@@ -263,6 +264,8 @@ module uart_ind (input clk);
 
         assert (step <= 2'd2);
         if (!por) assert (clean_a && clean_b && clean_w);
+        // The UART program has no `keep` load, so no hart ever holds a kept byte.
+        if (!por) assert (keep_a == 0 && keep_b == 0 && keep_w == 0);
         if (!rst) begin
             // CLEAN
             assert (viol_a == 0 && viol_b == 0 && vout_a == 0 && vout_b == 0);

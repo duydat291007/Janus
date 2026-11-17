@@ -52,9 +52,8 @@ same. Everything below was checked in simulation or by formal proof.
   modes, for any half period from 8 ticks. It covers what UART does not use:
   clocked bits, two data lines at once, gapless byte streams and a trap. Each
   side stores the byte the other sent, and a monitor that knows only the
-  textbook rules for the mode reads the same bytes off the wires. Limit: the
-  target takes its next byte ahead, so one queued byte is dropped if the
-  controller ends the transfer there.
+  textbook rules for the mode reads the same bytes off the wires, and no
+  byte leaves either queue unsent.
 - A third protocol is proven whole: 1-Wire, controller and target, at its
   real timing. It covers what the other two do not use: an open-drain line
   both sides pull low, traps on how long the line is held, a loop counter,

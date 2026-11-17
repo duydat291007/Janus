@@ -154,8 +154,10 @@ def a_second_transaction_keeps_the_targets_queue():
     assert list(c.rx_q)[1:] == [0x28] and list(t.rx_q) == [CMD], (c.rx_q, t.rx_q)
     c.tx_q.extend([0x44, 0xFF])
     bus.run(4000)
-    # 0xC3 was taken ahead when the first read ended, so the next byte is 0x55.
-    assert list(c.rx_q)[3:] == [0x55] and list(t.rx_q) == [CMD, 0x44], (c.rx_q, t.rx_q)
+    # The target loaded 0xC3 when the first read ended, before the reset came.
+    # It keeps its byte queued until the last bit is out, so 0xC3 is read next.
+    assert list(c.rx_q)[3:] == [0xC3] and list(t.rx_q) == [CMD, 0x44], (c.rx_q, t.rx_q)
+    assert list(t.tx_q) == [0x55, 0x66], t.tx_q
     assert not c.arb_lost and not t.arb_lost
     assert (c.violations, t.violations) == (0, 0)
     assert all(byte < 0x80 for byte in (c.rx_q[0], c.rx_q[2])), "presence not seen"

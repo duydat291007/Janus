@@ -82,7 +82,7 @@ class Prog:
         self._emit("set", pin=pin, owner=owner, val=val)
 
     def bits(self, pin, owner, n=1, src="tx", dwell=1, sync=False,
-             clocked=False, stream=False, free=False, brk=False):
+             clocked=False, stream=False, free=False, brk=False, keep=False):
         """All wire activity. src is "tx", "crc" or a constant 0 or 1.
 
         Timebase bits: the owner drives at the bit edge, and everyone samples
@@ -97,12 +97,15 @@ class Prog:
         clocked: timed by the clock in `mode`, with dwell as the half period.
         stream: refill and store between bytes with no gap. ROLE-DEPENDENT:
         only the clock owner decides to stop.
+        keep: with stream, each refill keeps its byte in the queue until the
+        byte's last bit goes out, as `load(keep=True)` does.
         brk: a break. The owner drives the pin and its pair low; non-owners
         flag anything else. A break bit bypasses the line code and the coder.
         """
+        assert stream or not keep, "keep applies to a stream's refills"
         self._emit("bits", pin=pin, owner=owner, n=n, src=src, dwell=dwell,
                    sync=sync, clocked=clocked, stream=stream,
-                   free=free, brk=brk)
+                   free=free, brk=brk, keep=keep)
 
     def claim(self, party, pin, otherwise=None):
         """Wait for data to send (only the base role party) or for pin to
@@ -110,9 +113,15 @@ class Prog:
         time becomes otherwise."""
         self._emit("claim", party=party, pin=pin, otherwise=otherwise)
 
-    def load(self, party, imm=None):
-        """Fill the transmit shifter from the queue, or from imm."""
-        self._emit("load", party=party, imm=imm)
+    def load(self, party, imm=None, keep=False):
+        """Fill the transmit shifter from the queue, or from imm.
+
+        keep: the byte stays at the head of the queue until its last bit goes
+        out. A trap that cuts it off first leaves it there to be sent next
+        time, so a party that loads before it knows it will send loses
+        nothing."""
+        assert imm is None or not keep, "keep applies to a byte from the queue"
+        self._emit("load", party=party, imm=imm, keep=keep)
 
     def store(self, party, lane=0):
         self._emit("store", party=party, lane=lane)
@@ -158,8 +167,8 @@ class Prog:
     def step(self, pin, owner, val, dwell, sync=False, free=False):
         self.bits(pin, owner, src=val, dwell=dwell, sync=sync, free=free)
 
-    def clocked(self, pin, owner, n, half, stream=False):
-        self.bits(pin, owner, n=n, dwell=half, clocked=True, stream=stream)
+    def clocked(self, pin, owner, n, half, stream=False, keep=False):
+        self.bits(pin, owner, n=n, dwell=half, clocked=True, stream=stream, keep=keep)
 
     def jump(self, label):
         self.branch("always", label)
@@ -226,6 +235,7 @@ class Hart:
         self.out = {}
         self.tx_q, self.rx_q, self.seen = deque(tx), deque(), deque()
         self.tx, self.rx, self.last, self.count = 0, [0, 0], 0, 0
+        self.keep = 0  # bits of a kept byte still to go out before it leaves the queue
         self.partial, self.violations, self.arb_lost = 0, 0, False
         self.k = 0  # which bit of the current `bits` instruction
         self.held = {}
@@ -267,6 +277,7 @@ class Hart:
         if self.partial:  # a frame ended mid-byte
             self._violate()
         self.partial, self.role, self.edge = 0, self.base_role, self.now
+        self.keep = 0  # a kept byte cut off here stays queued
         self.armed = dict(self.pin)
         self.gen = self._run(self.prog.labels[goto])
 
@@ -304,10 +315,13 @@ class Hart:
         if self._mine(owner):
             self._drive(pin, val)
 
-    def _load(self, party, imm):
+    def _load(self, party, imm, keep):
         if self._mine(party):
+            self.keep = 0
             if imm is not None:
                 self.tx = imm
+            elif keep and self.tx_q:
+                self.tx, self.keep = self.tx_q[0], 8
             else:
                 self.tx = self.tx_q.popleft() if self.tx_q else 0xFF
 
@@ -366,9 +380,9 @@ class Hart:
             sending = self.tx_q and self.pin[pin] == 1
             self.role = party if sending else otherwise
 
-    def _bits(self, pin, owner, n, src, dwell, sync, clocked, stream, free, brk):
+    def _bits(self, pin, owner, n, src, dwell, sync, clocked, stream, free, brk, keep):
         if clocked:
-            yield from self._clocked_bits(pin, owner, n, dwell, stream)
+            yield from self._clocked_bits(pin, owner, n, dwell, stream, keep)
             return
         for k in range(n):
             self.partial = self.k = k
@@ -386,6 +400,10 @@ class Hart:
                 val, self.tx = (self.tx >> 7) & 1, (self.tx << 1) & 0xFF
             else:
                 val, self.tx = self.tx & 1, self.tx >> 1
+            if self.keep:
+                self.keep -= 1
+                if not self.keep and self.tx_q:
+                    self.tx_q.popleft()  # its last bit is out
             return val
         if src == "crc":
             top = self.crc >> ((self.cfg["width"] & 31) - 1)
@@ -402,6 +420,7 @@ class Hart:
     def _lose(self, pin, also=None):
         self.role, self.arb_lost = self.cfg["lose_to"], True
         self.tx_q.clear()
+        self.keep = 0
         self._put(pin, None)
         if also:
             self._drive(also, None)
@@ -553,11 +572,15 @@ class Hart:
             if not self._mine(owner):
                 (self.seen if self.role == WITNESS else self.rx_q).append(self.rx[i])
 
-    def _refill(self, lanes):
+    def _refill(self, lanes, keep):
         if any(self._mine(owner) for pin, owner in lanes):
-            self.tx = self.tx_q.popleft() if self.tx_q else 0xFF
+            self.keep = 0
+            if keep and self.tx_q:
+                self.tx, self.keep = self.tx_q[0], 8
+            else:
+                self.tx = self.tx_q.popleft() if self.tx_q else 0xFF
 
-    def _clocked_bits(self, pin, owner, n, half, stream):
+    def _clocked_bits(self, pin, owner, n, half, stream, keep):
         cfg = self.cfg
         clk, clk_owner, cpha = cfg["clk"], cfg["clk_owner"], cfg["cpha"]
         active, idle = 1 - cfg["cpol"], cfg["cpol"]
@@ -585,4 +608,4 @@ class Hart:
             self._store_incoming(lanes)
             if self._mine(clk_owner) and not self.tx_q:
                 return
-            self._refill(lanes)
+            self._refill(lanes, keep)

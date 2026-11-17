@@ -15,16 +15,15 @@
 //
 // Free, so the result holds for every choice:
 //   start       the address the program is loaded at, 0 to 34
-//   valid, data both queues: any bytes, arriving at any time; the target's
-//               may even lose entries
+//   valid, data both queues: any bytes, arriving at any time
 //   other       the three unused pins, on every tick
 //   unwritten   what the other 34 program words hold
 //
 // Assumed:
 //   - both harts leave reset on the same tick, with the program's two hold
 //     traps set, no prescaler and no adversary fault;
-//   - an entry in the controller's queue stays until the hart takes it, as
-//     in janus_fifo;
+//   - an entry stays at the head of its queue until the hart pops it, as in
+//     janus_fifo;
 //   - DQ is open drain with a pull-up: low exactly when a hart drives it low.
 //
 // Claims:
@@ -47,8 +46,11 @@
 //          side by side with the controller everywhere but in `idle` and the
 //          first 130 ticks of a reset pulse.
 //
-// Not claimed: when a read ends, the target has already taken its next byte.
-// If the controller resets instead of reading on, that byte is never sent.
+//   KEPT   no byte leaves the target's queue unsent. The target takes its
+//          next byte when a read ends, before it knows another read slot is
+//          coming; it keeps the byte queued (`keep`) and pops it as its last
+//          bit goes out. When the controller resets instead, the byte stays
+//          at the head of the queue for the next transaction.
 //
 // tb_onewire_ind.v simulates this same module with OW_SIM defined: the free
 // signals become inputs driven at random, and every assertion is checked once
@@ -96,6 +98,7 @@ module onewire_ind (input clk);
     wire        last_c, last_t, mine_c, mine_t, val_c, val_t;
     wire        pop_c, pop_t, clear_c, clear_t, push_c, push_t, seen_c, seen_t, seen2_c, seen2_t;
     wire        lost_c, lost_t;
+    wire [3:0]  keep_c, keep_t;
 
     // DQ is open drain with a pull-up: low exactly when a hart drives it low.
     wire        low = (oe_c[0] && !ov_c[0]) || (oe_t[0] && !ov_t[0]);
@@ -117,7 +120,7 @@ module onewire_ind (input clk);
         .dbg_val(val_c), .dbg_pin(pin_c), .dbg_s1(s1_c), .dbg_armed(armed_c),
         .dbg_code(code_c), .dbg_inserted(), .dbg_stuff_bit(), .dbg_width(),
         .dbg_viol(viol_c), .dbg_tx(tx_c), .dbg_cfg(cfg_c), .dbg_cset(cset_c),
-        .dbg_cnt(), .dbg_rx1(), .dbg_prev(), .dbg_held(held_c), .dbg_clean());
+        .dbg_cnt(), .dbg_rx1(), .dbg_prev(), .dbg_held(held_c), .dbg_keep(keep_c), .dbg_clean());
 
     janus_hart t (.clk(clk), .por(por), .rst(rst), .wire_in(bus), .oe(oe_t), .ov(ov_t),
         .od_mask(8'h01), .base_role(2'd1), .reset_pc(start), .addr_reg(addr_t), .pc(pc_t),
@@ -131,7 +134,7 @@ module onewire_ind (input clk);
         .dbg_val(val_t), .dbg_pin(pin_t), .dbg_s1(s1_t), .dbg_armed(armed_t),
         .dbg_code(code_t), .dbg_inserted(), .dbg_stuff_bit(), .dbg_width(),
         .dbg_viol(viol_t), .dbg_tx(tx_t), .dbg_cfg(cfg_t), .dbg_cset(cset_t),
-        .dbg_cnt(), .dbg_rx1(), .dbg_prev(), .dbg_held(held_t), .dbg_clean());
+        .dbg_cnt(), .dbg_rx1(), .dbg_prev(), .dbg_held(held_t), .dbg_keep(keep_t), .dbg_clean());
 
     localparam S_BOOT = 4'd0, S_EXEC = 4'd1, S_CLAIM = 4'd2, S_SYNC = 4'd3, S_EDGE = 4'd4,
                S_MID = 4'd5;
@@ -201,7 +204,10 @@ module onewire_ind (input clk);
     wire       t_stores = !rst && !trap && t_exec && at_t == PC_W_STORE;
     wire       c_stores = !rst && !trap && c_exec && at_c == PC_R_STORE;
     wire       p_stores = !rst && !trap && c_exec && at_c == PC_STORE_PRESENCE;
-    reg        t_stored = 0, c_stored = 0, p_stored = 0, took_c = 0, took_t = 0;
+    reg        t_stored = 0, c_stored = 0, p_stored = 0, took_c = 0;
+    reg        vq_t = 0, kv_t = 0, trapped = 0;
+    reg [7:0]  dq_t = 0;         // the target's queue head one tick ago
+    reg [3:0]  kq_t = 0;         // its keep count one tick ago
 
     // The bit of the byte in hand that the slot in progress carries. The
     // counter runs from 8 down to 1, and the least significant bit goes first.
@@ -214,7 +220,12 @@ module onewire_ind (input clk);
         c_stored <= c_stores;
         p_stored <= p_stores;
         took_c <= (c_loads || c_token) && valid_c;
-        took_t <= t_loads && valid_t;
+        vq_t <= valid_t;
+        dq_t <= data_t;
+        kq_t <= keep_t;
+        trapped <= !rst && trap;
+        if (rst) kv_t <= 0;
+        else if (t_loads) kv_t <= valid_t;   // a byte from the queue is kept
         if (rst) begin
             wr <= 0;
             rd <= 0;
@@ -286,6 +297,8 @@ module onewire_ind (input clk);
 `endif
         assume (start <= MAX_START);
         if (vq_c && !pop_c) assume (valid_c);
+        // The target's queue: the entry at its head stays until it is popped.
+        if (vq_t && !pop_t) assume (valid_t && data_t == dq_t);
 
         assert (step <= 3'd5);
         if (!rst) begin
@@ -301,7 +314,20 @@ module onewire_ind (input clk);
             if (c_stored) assert (pdata_c == rd);
             if (p_stored) assert (!pdata_c[7]);  // the presence pulse was seen
             assert (push_t == t_stored && push_c == (c_stored || p_stored));
-            assert (pop_c == took_c && pop_t == took_t);
+            assert (pop_c == took_c && keep_c == 0);
+            // KEPT. The target's byte is popped exactly when its last bit
+            // goes out: the keep count runs from 1 to 0 on a tick with no trap.
+            assert (pop_t == (kq_t == 4'd1 && keep_t == 0 && vq_t && !trapped));
+            // The count is the bits of the kept byte still to go: 8 when it is
+            // loaded, then one fewer for each read slot the target sends in.
+            assert (keep_t == (!kv_t ? 4'd0
+                               : at_t == PC_COUNT_READ ? 4'd8
+                               : at_t == PC_R_START || (at_t == PC_R_DATA && t_exec) ? count_t[3:0]
+                               : at_t == PC_R_DATA || at_t == PC_R_REST || at_t == PC_R_LOOP
+                                 ? count_t[3:0] - 4'd1
+                               : 4'd0));
+            // While a byte is kept, it is the head of the queue.
+            if (keep_t != 0) assert (vq_t && dq_t == rd);
             // The byte that let the controller leave `idle` stays queued until
             // it is written, and a read token stays until it is taken.
             if (at_c == PC_PULSE || (at_c >= PC_SUSPECT && at_c <= PC_LOAD_WRITE)
