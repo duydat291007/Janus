@@ -66,6 +66,7 @@ module janus_hart (
     output     [10:0] dbg_cnt,
     output     [7:0]  dbg_rx1,
     output     [3:0]  dbg_prev,
+    output     [31:0] dbg_held,
     output            dbg_clean
 `endif
 );
@@ -175,6 +176,7 @@ module janus_hart (
     assign dbg_cnt = cnt;
     assign dbg_rx1 = rx1;
     assign dbg_prev = prev;
+    assign dbg_held = {held1, held0};
     // Everything the restricted program subset can never change from reset.
     assign dbg_clean = !c_rs_en && !lf_valid && c_lose == WITNESS
         && !c_l2_en && c_div == 0 && div_cnt == 0

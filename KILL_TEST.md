@@ -1191,4 +1191,72 @@ fill a queue twice, so that case runs on the Verilog as a chip scenario
 instead, which checks the bytes and that no flag is raised. Replay 643 of 643
 at prescalers 0, 3 and 7; chip scenarios 68 of 68 with 917 byte checks.
 
-The proof itself is not written yet: only its harness and simulation exist.
+The proof came next.
+
+### A third protocol proven whole: 1-Wire
+
+`rtl/onewire_ind.sv` proves the 1-Wire program the way `uart_ind.sv` and
+`spi_ind.sv` prove theirs: the real program, taken from the assembler by
+`rtl/gen_onewire_rom.py`, on two real harts. It covers what the other two
+never use: an open-drain line both sides pull low, traps on how long the line
+is held, a loop counter, and a stretch where the harts are out of step.
+
+The timings are fixed numbers of ticks, so the invariants give every counter
+its exact value at every point of the program. The two harts run side by
+side everywhere except in `idle` and the first 130 ticks of a reset pulse.
+There the target has gone on to a next read: it takes a byte, takes the
+reset pulse for a read slot, sends one bit into it and waits for a second
+slot. The width trap fires in both on the same tick and they are together
+again. In the tightest case the target reaches its wait on the very tick the
+line falls, with nothing to spare.
+
+Free: the load address, both queues, the three unused pins on every tick,
+and the unwritten program words.
+
+What it claims:
+
+- DATA. The target stores the byte written. The controller stores every byte
+  read, and a presence byte whose top bit is 0. It starts a transaction only
+  with a byte to write and reads one byte per token. Nothing else is stored
+  or taken.
+- WIRE. A monitor that sees only the wire and knows only the textbook rules
+  reads those same bytes, least significant bit first, from the level in the
+  fifteenth tick of each slot. Every low is a slot of at most 120 ticks or a
+  reset of at least 480. The presence pulse starts 15 to 60 ticks after the
+  reset and lasts 60 to 240. Falls are at least 61 ticks apart.
+- CLEAN. No violations, no arbitration loss, no other pin touched.
+- LIVE. Each hart rests only in a short list of states.
+
+The invariants were written from the harness simulation's trace and all held
+in simulation and in the solver at the first attempt. The proof closes in 40
+seconds.
+
+It is not vacuous. 46 planted bugs each break it: 18 in the program, 16 in
+the hart, 1 that both harts share (most significant bit first), 7 in the
+monitor's own rules and 4 that weaken its assumptions. `rtl/sim_onewire.sh`
+simulates the same harness on random inputs: 20 runs, 57 transactions, 57
+bytes written and 743 read over 595,590 ticks, with a separate scoreboard,
+and no failure.
+
+What the exact numbers show:
+
+- **The reset pulse is 482 ticks on the wire, 2 over the 480 minimum.** Each
+  trap cuts the step before it short: 131 ticks to the first trap, 170 to
+  the second, 181 to the release. The monitor rule fails at 483.
+- **The presence pulse starts exactly 15 ticks after the reset ends,** the
+  minimum, and lasts 120. The monitor rule fails at 16.
+- **Falls are 70 ticks apart when writing and 64 when reading.** The monitor
+  rule fails at 65.
+- **The step after the first trap would let go of the line one tick after
+  the second trap fires.** With the reset trap one tick later the proof
+  fails.
+
+These margins are in ticks. With a crystal clock they hold; a clock more
+than 0.4 % fast would make the reset shorter than 480 microseconds. Longer
+steps would widen them. The program is unchanged for now.
+
+Limits: both harts start together and share one clock; one target; no
+witness; no prescaler in the proof, so one tick is one clock; the queues,
+pin rotation and host port are outside it. As in SPI, the byte the target
+took ahead when a read ended is never sent. I2C, CAN and USB are not proven
+whole.

@@ -55,12 +55,21 @@ same. Everything below was checked in simulation or by formal proof.
   textbook rules for the mode reads the same bytes off the wires. Limit: the
   target takes its next byte ahead, so one queued byte is dropped if the
   controller ends the transfer there.
-- A third unbounded proof covers timed bits, `sync`, stuffing, CRC, NRZI,
+- A third protocol is proven whole: 1-Wire, controller and target, at its
+  real timing. It covers what the other two do not use: an open-drain line
+  both sides pull low, traps on how long the line is held, a loop counter,
+  and a stretch where the two harts are out of step and a trap brings them
+  back. The target stores the byte written, the controller stores each byte
+  read, and a monitor that knows only the textbook rules sees a reset of at
+  least 480 ticks, a presence pulse in its window and those same bytes.
+  Building it exposed a bug, now fixed: a second transaction cleared the
+  target's queue.
+- A fourth unbounded proof covers timed bits, `sync`, stuffing, CRC, NRZI,
   the pin pair and break bits for every program in that subset: the two harts
   stay in step, the listener reads what the owner sent, and neither counts a
   violation the other does not. It does not cover the jump on a break, `set`,
   clocked bits, traps, `claim`, `choice`, `match`, arbitration, resync or
-  witnesses, so the other four protocols are not proven whole.
+  witnesses, so the other three protocols are not proven whole.
 - CAN has no error frames or automatic retransmission, so it must not be used on
   a shared CAN bus.
 - Low-speed USB was a hold-out test. It failed on the frozen instruction set and
@@ -100,6 +109,7 @@ bash div_replay.sh
 bash prove_ind.sh d4
 bash prove_uart.sh
 bash prove_spi.sh
+bash prove_onewire.sh
 bash sim_uart.sh        # the UART proof's harness, simulated on random inputs
 bash final_check.sh     # every planted-bug set and proof task
 bash chip.sh synth

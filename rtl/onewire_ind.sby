@@ -1,0 +1,20 @@
+[tasks]
+h8
+
+[options]
+mode prove
+depth 12
+timeout 6000
+
+[engines]
+smtbmc yices
+
+[script]
+read -formal janus_hart.v
+read -formal onewire_ind.sv
+prep -top onewire_ind
+
+[files]
+janus_hart.v
+onewire_ind.sv
+onewire_rom.vh
