@@ -1260,3 +1260,57 @@ witness; no prescaler in the proof, so one tick is one clock; the queues,
 pin rotation and host port are outside it. As in SPI, the byte the target
 took ahead when a read ended is never sent. I2C, CAN and USB are not proven
 whole.
+
+### 1-Wire timing margins widened
+
+The proof's exact numbers showed a program that met the standard with almost
+nothing to spare, so a tick only slightly short would break it. The program
+now has room on both sides, and the proof reads every timing from the
+program's own words: `rtl/gen_onewire_rom.py` emits each step's length, and
+each count in the invariants is written in terms of those lengths. The next
+timing change needs no edit to the proof, and the generator checks the few
+conditions the formulas take for granted.
+
+| On the wire | Standard | Was | Now |
+|---|---|---|---|
+| Reset pulse | 480 or more | 482 | 522 |
+| Reset end to presence pulse | 15 to 60 | 15 | 30 |
+| Presence pulse | 60 to 240 | 120 | 80 |
+| Controller reads presence, after the reset end | 60 to 75 | 73 | 68 |
+| Reset end to first slot | 480 or more | 435 | 520 |
+| Read slots, fall to fall | 61 or more | 64 | 70 |
+| Reset trap before the suspect step lets go | | 0 | 31 |
+
+The reset end to first slot was 435, short of the standard's 480. The
+monitor did not check it. It now does, and on the old program that rule
+fails at once in simulation. A real device has long finished its presence
+pulse by 435, so nothing failed, but it was out of the standard.
+
+The reset and the recovery after it now hold with a tick up to 7 % short.
+The controller's presence read sits inside the window every device's pulse
+must cover, with 8 ticks of room on one side and 7 on the other.
+
+One timing is unchanged on purpose: a written 0 stays 60 ticks low, the
+standard's minimum. One program serves both roles. In a write slot the
+target follows the same steps as the controller, so a longer 0 also makes
+the target later to catch the next slot. With 66 low, two model tests failed:
+the target missed slots from a reference controller that runs them 70
+apart, the usual timing. Measured in the
+model, the target follows a master's slots of 65 ticks or more and misses
+them at 64 or less. The standard allows down to 61. Both are limits of
+sharing one program between the roles.
+
+Checks: the proof closes in 39 seconds. Widening the suspect step made one
+invariant too loose: it allowed states past the moment the reset trap must
+fire, and induction failed until it was bounded by the hold count. 50
+planted bugs each break the proof, 4 of them new: each changes one timing in
+the program, word and step length together, so the proof's own formulas
+follow it. A reset of 479 ticks, a first slot 479 ticks after the reset, a
+presence pulse 14 ticks after it and read slots 60 apart are each caught by
+the textbook rules alone. Four older planted bugs tightened a monitor rule
+by one tick past the old timings, and with the wider margins they no longer
+bit. They now sit one tick past the new ones: 71 ticks between falls, a
+reset of 523, presence 31 ticks after the reset and under 80 long. Each
+breaks the proof. The harness simulation: 20 runs, 50 transactions,
+50 bytes written and 750 read over 626,058 ticks, no failure. Model tests 9
+of 9.

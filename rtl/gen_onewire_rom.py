@@ -23,6 +23,10 @@ NAMES = ["NOARB", "CLAIM", "PULSE", "HANG", "SUSPECT", "SUSPECT_END", "SUSPECT_J
 SHAPE = ["mode", "claim", "bits", "branch", "bits", "bits", "branch", "bits", "bits", "load", "bits",
          "store", "bits", "load", "counter", "bits", "bits", "bits", "branch", "store", "choice",
          "load", "load", "counter", "bits", "bits", "bits", "branch", "store", "branch"]
+# The timed steps the proof reasons about, named for their D_ parameter.
+DWELLS = {"SUSP": "SUSPECT", "RESET": "RESET", "RELEASE": "RELEASE", "PRES": "PRESENCE",
+          "WAIT": "WAIT", "START": "W_START", "WBIT": "W_DATA", "WREST": "W_REST",
+          "RBIT": "R_DATA", "RREST": "R_REST"}
 SIZE = 64      # words of program memory
 JUMPS = (5, 6)  # opcodes whose low bits are a target address: branch and choice
 
@@ -48,6 +52,21 @@ def main(path):
              f"localparam [5:0] MAX_START = 6'd{SIZE - count};",
              f"localparam [15:0] HOLD_SUSPECT = 16'd{config[4]};",
              f"localparam [15:0] HOLD_RESET = 16'd{config[5]};"]
+    # The step lengths, so the proof follows any change to the timings.
+    d = {name: words[NAMES.index(at)] & 0x7FF for name, at in DWELLS.items()}
+    assert d["START"] == words[NAMES.index("R_START")] & 0x7FF, "both slots start alike"
+    hold_s, hold_r = config[4], config[5]
+    # What the proof's formulas take for granted about the timings.
+    assert d["START"] + d["RBIT"] // 2 == 15, "the controller reads a bit 15 ticks into its slot"
+    assert 15 - d["START"] <= d["WBIT"] // 2 - 1, "the target reads a written bit inside it"
+    assert d["WREST"] == 10, "the step from the last write slot to the first read slot assumes it"
+    assert (words[NAMES.index("PULSE")] & 0x7FF) // 2 > hold_s, "the suspect trap ends the pulse step"
+    assert hold_s + d["SUSP"] >= hold_r, "the reset trap fires before the line is let go"
+    assert d["START"] + d["RBIT"] + d["RREST"] // 2 + 1 < hold_s, "a stray read slot ends first"
+    assert d["RREST"] - d["RREST"] // 2 - 6 > d["WREST"] - d["WREST"] // 2 - 2
+    assert hold_r + d["RESET"] + 2 + d["RELEASE"] < 1023 and d["PRES"] + d["WAIT"] + 2 < 1023
+    assert d["RELEASE"] < 127
+    lines += [f"localparam [11:0] D_{name} = 12'd{v};" for name, v in d.items()]
     lines += [f"localparam [5:0] PC_{name} = 6'd{i};" for i, name in enumerate(NAMES)]
     lines += ["// The word `at` places after the address `start` the program is loaded at.",
               "function automatic [31:0] ow_word(input [5:0] at, input [5:0] start,",

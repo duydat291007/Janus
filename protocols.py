@@ -131,18 +131,26 @@ def onewire(div=0):
     p.label("hang")
     p.jump("hang")
 
+    # The timings sit inside the standard's limits with room on both sides,
+    # so a tick may run a few percent long or short. On the wire: a reset of
+    # 522 ticks (480 at least), presence from 30 to 110 ticks after it ends
+    # (start 15 to 60, last 60 to 240), the controller reading it at 70, and
+    # 520 ticks high before the first slot (480 at least). Read slots are 70
+    # apart. The write slot keeps the usual 60 low and 10 high for a 0: the
+    # target waits out the same steps, and with a longer 0 it would not be
+    # ready for the next slot of a master that runs them 70 apart.
     p.label("suspect")
-    p.step("DQ", C, 0, 170)  # still low here unless the pulse was illegal
+    p.step("DQ", C, 0, 200)  # still low here unless the pulse was illegal
     p.step("DQ", C, 1, 2, free=True)  # reached only after an illegal pulse ended
     p.jump("idle")
 
     p.label("reset")
-    p.step("DQ", C, 0, 180)  # rest of the reset; the width trap aligned everyone
-    p.step("DQ", C, 1, 15, sync=True)
+    p.step("DQ", C, 0, 220)  # rest of the reset; the width trap aligned everyone
+    p.step("DQ", C, 1, 30, sync=True)
     p.load(T, imm=0x00)
-    p.bits("DQ", T, dwell=120)  # presence pulse
+    p.bits("DQ", T, dwell=80)  # presence pulse
     p.store(C)
-    p.step("DQ", C, 1, 300)  # no device means the line never went low
+    p.step("DQ", C, 1, 410)  # no device means the line never went low
 
     p.load(C)
     p.counter(8)
@@ -161,7 +169,7 @@ def onewire(div=0):
     p.label("read_slot")
     p.step("DQ", C, 0, 6, sync=True)
     p.bits("DQ", T, dwell=18)
-    p.step("DQ", C, 1, 40, free=True)  # recovery; a reset may be starting
+    p.step("DQ", C, 1, 46, free=True)  # recovery; a reset may be starting
     p.loop("read_slot")
     p.store(C)
     p.jump("read_byte")

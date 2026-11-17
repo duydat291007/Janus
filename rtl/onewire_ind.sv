@@ -9,7 +9,9 @@
 //
 // The program's timings are fixed numbers of ticks, one tick being one
 // microsecond, so the invariants give every counter its exact value at every
-// point of the program.
+// point of the program. Those values are written in terms of the step
+// lengths gen_onewire_rom.py reads from the program, so a timing change
+// needs no edit here.
 //
 // Free, so the result holds for every choice:
 //   start       the address the program is loaded at, 0 to 34
@@ -36,7 +38,8 @@
 //          rules, reads those same bytes, least significant bit first. Every
 //          low is a slot of at most 120 ticks or a reset of at least 480.
 //          The presence pulse starts 15 to 60 ticks after the reset ends and
-//          lasts 60 to 240. Falls are at least 61 ticks apart, and a reset
+//          lasts 60 to 240. The first slot comes at least 480 ticks after
+//          the reset ends. Falls are at least 61 ticks apart, and a reset
 //          starts only between bytes.
 //   CLEAN  neither hart counts a violation or loses arbitration, and neither
 //          touches another pin.
@@ -139,6 +142,30 @@ module onewire_ind (input clk);
     wire        t_sync = s_t == S_SYNC, t_edge = s_t == S_EDGE, t_mid = s_t == S_MID;
     wire [11:0] since_c = now_c - edge_c, ahead_c = edge_c - now_c;
 
+    // The program's timings, from its own words (onewire_rom.vh). A timed
+    // step moves on in its middle, H_ ticks after its edge, and the next
+    // step's edge comes R_ ticks after that.
+    localparam [11:0] HS = HOLD_SUSPECT[11:0], HR = HOLD_RESET[11:0];
+    localparam [11:0] H_SUSP = D_SUSP >> 1, R_SUSP = D_SUSP - (D_SUSP >> 1);
+    localparam [11:0] H_RESET = D_RESET >> 1, R_RESET = D_RESET - (D_RESET >> 1);
+    localparam [11:0] H_RELEASE = D_RELEASE >> 1, R_RELEASE = D_RELEASE - (D_RELEASE >> 1);
+    localparam [11:0] H_PRES = D_PRES >> 1, R_PRES = D_PRES - (D_PRES >> 1);
+    localparam [11:0] H_WAIT = D_WAIT >> 1, R_WAIT = D_WAIT - (D_WAIT >> 1);
+    localparam [11:0] H_START = D_START >> 1, R_START = D_START - (D_START >> 1);
+    localparam [11:0] H_WBIT = D_WBIT >> 1, R_WBIT = D_WBIT - (D_WBIT >> 1);
+    localparam [11:0] H_WREST = D_WREST >> 1, R_WREST = D_WREST - (D_WREST >> 1);
+    localparam [11:0] H_RBIT = D_RBIT >> 1, R_RBIT = D_RBIT - (D_RBIT >> 1);
+    localparam [11:0] H_RREST = D_RREST >> 1, R_RREST = D_RREST - (D_RREST >> 1);
+    // Held-low counts: when the reset is let go, and at the start of a slot.
+    localparam [15:0] LOW_RESET = HOLD_RESET + D_RESET + 16'd1;
+    localparam [15:0] LOW_START = D_START - 16'd1;
+    // On the wire: the reset pulse, and the time from one fall to the next.
+    localparam [9:0]  W_RESET = HOLD_RESET + D_RESET + 10'd2;
+    localparam [9:0]  SLOT_W = D_START + D_WBIT + D_WREST;
+    localparam [9:0]  SLOT_R = D_START + D_RBIT + D_RREST;
+    localparam [9:0]  SLOT_MIN = SLOT_W < SLOT_R ? SLOT_W : SLOT_R;
+    localparam [9:0]  W_BIT_END = D_START + D_WBIT, R_BIT_END = D_START + D_RBIT;
+
     // The line as the harts see it: one tick ago, two ticks ago, and for how
     // many ticks in a row the two-tick-old level has been low.
     wire [17:0] line = {s1_c[0], pin_c[0], held_c[15:0]};
@@ -210,6 +237,7 @@ module onewire_ind (input clk);
     reg [2:0]  m_n = 0;          // bits read of the byte in hand
     reg [7:0]  m_b = 0;          // those bits
     reg        m_first = 0;      // the byte in hand is the first after the reset
+    reg [6:0]  m_p = 0;          // ticks from the end of the reset to the presence pulse
     wire       m_fall = m_prev && !bus[0], m_rise = !m_prev && bus[0];
     // A low too long for a slot: a reset is starting, not a bit.
     wire       m_long = m_ph == 2'd3 && !m_prev && !bus[0] && m_t == 10'd120;
@@ -224,7 +252,10 @@ module onewire_ind (input clk);
             m_ph <= 2'd3;
             m_n <= 0;
             m_first <= 1'b1;
-        end else if (m_fall && m_ph == 2'd1) m_ph <= 2'd2;
+        end else if (m_fall && m_ph == 2'd1) begin
+            m_ph <= 2'd2;
+            m_p <= m_h;
+        end
         else if (m_long) begin
             m_ph <= 2'd0;
             m_n <= 0;
@@ -238,7 +269,7 @@ module onewire_ind (input clk);
     // What the monitor's clocks read at each point of the program.
     wire [9:0]  sc = since_c[9:0], ac = ahead_c[9:0];
     wire        first_run = at_t <= PC_PULSE;    // while apart: before the first reset
-    wire [3:0]  w_n = sent + ((at_c == PC_W_DATA && c_mid && since_c >= 12'd9)
+    wire [3:0]  w_n = sent + ((at_c == PC_W_DATA && c_mid && since_c >= 12'd15 - D_START)
                               || at_c == PC_W_REST || at_c == PC_W_LOOP);
     wire [3:0]  r_n = sent + (at_c == PC_R_REST || at_c == PC_R_LOOP);
 
@@ -283,6 +314,8 @@ module onewire_ind (input clk);
             if (m_fall && m_ph == 2'd1) assert (m_h >= 7'd15 && m_h <= 7'd60);
             if (m_fall && m_ph == 2'd3) assert (m_t >= 10'd61);     // a slot and its recovery
             if (m_long) assert (m_n == 3'd1);                       // a reset starts between bytes
+            // The line stays high at least 480 ticks after a reset before the first slot.
+            if (m_fall && m_ph == 2'd3 && m_first && m_n == 0) assert ({3'd0, m_p} + m_t >= 10'd480);
             if (m_read && m_n == 3'd7) assert ({bus[0], m_b[7:1]} == (m_first ? wr : rd));
 
             // The monitor against the controller.
@@ -293,66 +326,67 @@ module onewire_ind (input clk);
                     if (first_run) assert (m_ph == 2'd0);
                     if (!(at_c == PC_PULSE && c_mid)) begin
                         if (first_run) assert (m_t == 10'd1023);
-                        else assert (m_ph == 2'd3 && m_n == 0 && !m_first && ahead_c <= 12'd16
-                                     && (m_t == 10'd1023 || {1'b0, m_t} + {1'b0, ac} >= 11'd64));
+                        else assert (m_ph == 2'd3 && m_n == 0 && !m_first && ahead_c <= R_RREST - 12'd4
+                                     && (m_t == 10'd1023 || {1'b0, m_t} + {1'b0, ac} >= {1'b0, SLOT_MIN}));
                     end else if (since_c == 0) begin
                         if (first_run) assert (m_t == 10'd1023);
-                        else assert (m_ph == 2'd3 && m_n == 0 && !m_first && m_t >= 10'd64);
+                        else assert (m_ph == 2'd3 && m_n == 0 && !m_first && m_t >= SLOT_MIN);
                     end else begin
                         assert (m_t == sc);
                         if (!first_run) assert (m_ph == (since_c <= 12'd120 ? 2'd3 : 2'd0) && !m_first
                                                 && m_n == (since_c >= 12'd15 && since_c <= 12'd120));
                     end
                 end
-                PC_SUSPECT: begin assert (m_ph == 2'd0 && m_t == (c_exec ? 10'd131 : 10'd132 + sc)); end
-                PC_SUSPECT_END: begin assert (m_ph == 2'd0 && m_t == 10'd302 - ac); end
-                PC_RESET: begin assert (m_ph == 2'd0 && m_t == (c_exec ? 10'd301 : 10'd302 + sc)); end
+                PC_SUSPECT: begin assert (m_ph == 2'd0 && m_t == (c_exec ? HOLD_SUSPECT[9:0] + 10'd1 : HOLD_SUSPECT[9:0] + 10'd2 + sc)); end
+                PC_SUSPECT_END: begin assert (m_ph == 2'd0 && m_t == HOLD_SUSPECT[9:0] + D_SUSP[9:0] + 10'd2 - ac); end
+                PC_RESET: begin assert (m_ph == 2'd0 && m_t == (c_exec ? HOLD_RESET[9:0] + 10'd1 : HOLD_RESET[9:0] + 10'd2 + sc)); end
                 PC_RELEASE: begin
-                    if (!c_mid) assert (m_ph == 2'd0 && m_t == 10'd482 - ac);
+                    if (!c_mid) assert (m_ph == 2'd0 && m_t == W_RESET - ac);
                     else begin
-                        assert (m_t == 10'd482 + sc && m_ph == (since_c != 0));
+                        assert (m_t == W_RESET + sc && m_ph == (since_c != 0));
                         if (since_c != 0) assert (m_h == sc[6:0]);
                     end
                 end
-                PC_LOAD_PRESENCE: begin assert (m_ph == 2'd1 && m_t == 10'd497 - ac && m_h == 7'd15 - ac[6:0]); end
+                PC_LOAD_PRESENCE: begin assert (m_ph == 2'd1 && m_t == W_RESET + D_RELEASE[9:0] - ac && m_h == D_RELEASE[6:0] - ac[6:0]); end
                 PC_PRESENCE: begin
-                    if (!c_mid) assert (m_ph == 2'd1 && m_t == 10'd497 - ac && m_h == 7'd15 - ac[6:0]);
-                    else if (since_c == 0) assert (m_ph == 2'd1 && m_t == 10'd497 && m_h == 7'd15);
+                    if (!c_mid) assert (m_ph == 2'd1 && m_t == W_RESET + D_RELEASE[9:0] - ac && m_h == D_RELEASE[6:0] - ac[6:0]);
+                    else if (since_c == 0) assert (m_ph == 2'd1 && m_t == W_RESET + D_RELEASE[9:0] && m_h == D_RELEASE[6:0]);
                     else assert (m_ph == 2'd2 && m_t == sc);
                 end
-                PC_STORE_PRESENCE: begin assert (m_ph == 2'd2 && m_t == 10'd120 - ac); end
+                PC_STORE_PRESENCE: begin assert (m_ph == 2'd2 && m_t == D_PRES[9:0] - ac); end
                 PC_WAIT: begin
-                    if (!c_mid) assert (m_ph == 2'd2 && m_t == 10'd120 - ac);
+                    if (!c_mid) assert (m_ph == 2'd2 && m_t == D_PRES[9:0] - ac);
                     else begin
-                        assert (m_t == 10'd120 + sc);
+                        assert (m_t == D_PRES[9:0] + sc);
                         if (since_c == 0) assert (m_ph == 2'd2);
                         else assert (m_ph == 2'd3 && m_n == 0 && m_first);
                     end
                 end
                 PC_LOAD_WRITE, PC_COUNT_WRITE: begin
-                    assert (m_ph == 2'd3 && m_n == 0 && m_first && m_t == 10'd420 - ac);
+                    assert (m_ph == 2'd3 && m_n == 0 && m_first && m_t == D_PRES[9:0] + D_WAIT[9:0] - ac);
                 end
                 PC_W_START: begin
-                    if (!c_mid || since_c == 0) assert (m_t == (count_c == 8'd8 ? 10'd420 : 10'd70) - (c_mid ? 10'd0 : ac));
+                    if (!c_mid || since_c == 0) assert (m_t == (count_c == 8'd8 ? D_PRES[9:0] + D_WAIT[9:0] : SLOT_W) - (c_mid ? 10'd0 : ac));
                     else assert (m_t == sc);
                 end
-                PC_W_DATA, PC_R_DATA: begin assert (m_t == (c_mid ? 10'd6 + sc : 10'd6 - ac)); end
-                PC_W_REST: begin assert (m_t == (c_mid ? 10'd60 + sc : 10'd60 - ac)); end
-                PC_W_LOOP, PC_W_STORE: begin assert (m_t == 10'd70 - ac); end
+                PC_W_DATA, PC_R_DATA: begin assert (m_t == (c_mid ? D_START[9:0] + sc : D_START[9:0] - ac)); end
+                PC_W_REST: begin assert (m_t == (c_mid ? W_BIT_END + sc : W_BIT_END - ac)); end
+                PC_W_LOOP, PC_W_STORE: begin assert (m_t == SLOT_W - ac); end
                 PC_CHOICE, PC_LOAD_TOKEN, PC_LOAD_READ, PC_COUNT_READ: begin
-                    assert (m_t == (ahead_c <= 12'd3 ? 10'd70 : 10'd64) - ac);
+                    assert (m_t == (ahead_c <= R_WREST - 12'd2 ? SLOT_W : SLOT_R) - ac);
                 end
                 PC_R_START: begin
-                    if (c_exec) assert (m_t == ((count_c == 8'd8 && ahead_c == 0) ? 10'd71 : 10'd64 - ac));
-                    if (c_edge) assert (m_t == 10'd64 - ac);
+                    if (c_exec) assert (m_t == ((count_c == 8'd8 && ahead_c == 0) ? SLOT_W + 10'd1 : SLOT_R - ac));
+                    if (c_edge) assert (m_t == SLOT_R - ac);
                     if (c_mid) assert (since_c != 0 ? m_t == sc
-                                       : (m_t == 10'd64 || (m_t == 10'd72 && count_c == 8'd8)));
+                                       : (m_t == SLOT_R || (m_t == SLOT_W + 10'd2 && count_c == 8'd8)));
                 end
-                PC_R_REST: begin assert (m_t == (c_mid ? 10'd24 + sc : 10'd24 - ac)); end
-                PC_R_LOOP, PC_R_STORE, PC_R_JUMP: begin assert (m_t == 10'd64 - ac); end
+                PC_R_REST: begin assert (m_t == (c_mid ? R_BIT_END + sc : R_BIT_END - ac)); end
+                PC_R_LOOP, PC_R_STORE, PC_R_JUMP: begin assert (m_t == SLOT_R - ac); end
                 default: ;
             endcase
             if (at_c >= PC_LOAD_WRITE) assert (m_ph == 2'd3);
+            if (m_ph >= 2'd2) assert (m_p == D_RELEASE[6:0]);
             // The bits the monitor has read are the low bits of the byte in flight.
             if (at_c >= PC_W_START && at_c <= PC_W_LOOP) begin
                 assert (m_n == w_n[2:0] && m_first == !w_n[3]);
@@ -425,103 +459,105 @@ module onewire_ind (input clk);
                 PC_NOARB, PC_CLAIM: begin assert (f_high(line) && armed_c[0]); end
                 PC_PULSE: begin
                     assert (armed_c[0]);
-                    if (c_mid) assert (since_c <= 12'd130 && f_fall(line, since_c));
+                    if (c_mid) assert (since_c <= HS && f_fall(line, since_c));
                     else assert (f_high(line));
                 end
                 PC_SUSPECT: begin
                     assert (!armed_c[0]);
-                    if (c_exec) assert (since_c == 0 && f_low(line, 16'd130));
-                    else assert (since_c <= 12'd84 && f_low(line, 16'd131 + since_c));
+                    if (c_exec) assert (since_c == 0 && f_low(line, HOLD_SUSPECT));
+                    else assert (since_c <= H_SUSP - 12'd1 && f_low(line, HOLD_SUSPECT + 16'd1 + since_c));
                 end
                 PC_SUSPECT_END: begin
-                    assert (!armed_c[0] && f_low(line, 16'd301 - ahead_c));
-                    assert (c_exec ? ahead_c == 12'd85 : (ahead_c >= 12'd1 && ahead_c <= 12'd84));
+                    assert (!armed_c[0] && f_low(line, HOLD_SUSPECT + D_SUSP + 16'd1 - ahead_c));
+                    // Until the reset trap fires: held below HOLD_RESET.
+                    assert (c_exec ? ahead_c == R_SUSP
+                                   : (ahead_c >= HS + D_SUSP + 12'd2 - HR && ahead_c <= R_SUSP - 12'd1));
                 end
                 PC_RESET: begin
                     assert (!armed_c[0]);
-                    if (c_exec) assert (since_c == 0 && f_low(line, 16'd300));
-                    else assert (since_c <= 12'd89 && f_low(line, 16'd301 + since_c));
+                    if (c_exec) assert (since_c == 0 && f_low(line, HOLD_RESET));
+                    else assert (since_c <= H_RESET - 12'd1 && f_low(line, HOLD_RESET + 16'd1 + since_c));
                 end
                 PC_RELEASE: begin
                     assert (!armed_c[0]);
-                    if (c_mid) assert (since_c <= 12'd6 && f_rise(line, since_c, 16'd481));
+                    if (c_mid) assert (since_c <= H_RELEASE - 12'd1 && f_rise(line, since_c, LOW_RESET));
                     else begin
-                        assert (f_low(line, 16'd481 - ahead_c));
-                        assert (c_exec ? ahead_c == 12'd90 : (ahead_c >= 12'd1 && ahead_c <= 12'd89));
+                        assert (f_low(line, LOW_RESET - ahead_c));
+                        assert (c_exec ? ahead_c == R_RESET : (ahead_c >= 12'd1 && ahead_c <= R_RESET - 12'd1));
                     end
                 end
-                PC_LOAD_PRESENCE: begin assert (armed_c[0] && f_high(line) && ahead_c == 12'd8); end
+                PC_LOAD_PRESENCE: begin assert (armed_c[0] && f_high(line) && ahead_c == R_RELEASE); end
                 PC_PRESENCE: begin
                     assert (armed_c[0]);
-                    if (c_mid) assert (since_c <= 12'd59 && f_fall(line, since_c));
+                    if (c_mid) assert (since_c <= H_PRES - 12'd1 && f_fall(line, since_c));
                     else begin
                         assert (f_high(line));
-                        assert (c_exec ? ahead_c == 12'd7 : (ahead_c >= 12'd1 && ahead_c <= 12'd6));
+                        assert (c_exec ? ahead_c == R_RELEASE - 12'd1 : (ahead_c >= 12'd1 && ahead_c <= R_RELEASE - 12'd2));
                     end
                 end
-                PC_STORE_PRESENCE: begin assert (!armed_c[0] && f_low(line, 16'd59) && ahead_c == 12'd60); end
+                PC_STORE_PRESENCE: begin assert (!armed_c[0] && f_low(line, D_PRES / 2 - 16'd1) && ahead_c == R_PRES); end
                 PC_WAIT: begin
                     assert (!armed_c[0]);
-                    if (c_mid) assert (since_c <= 12'd149 && f_rise(line, since_c, 16'd119));
+                    if (c_mid) assert (since_c <= H_WAIT - 12'd1 && f_rise(line, since_c, D_PRES - 16'd1));
                     else begin
-                        assert (f_low(line, 16'd119 - ahead_c));
-                        assert (c_exec ? ahead_c == 12'd59 : (ahead_c >= 12'd1 && ahead_c <= 12'd58));
+                        assert (f_low(line, D_PRES - 16'd1 - ahead_c));
+                        assert (c_exec ? ahead_c == R_PRES - 12'd1 : (ahead_c >= 12'd1 && ahead_c <= R_PRES - 12'd2));
                     end
                 end
-                PC_LOAD_WRITE: begin assert (armed_c[0] && f_high(line) && ahead_c == 12'd150); end
-                PC_COUNT_WRITE: begin assert (armed_c[0] && f_high(line) && ahead_c == 12'd149); end
+                PC_LOAD_WRITE: begin assert (armed_c[0] && f_high(line) && ahead_c == R_WAIT); end
+                PC_COUNT_WRITE: begin assert (armed_c[0] && f_high(line) && ahead_c == R_WAIT - 12'd1); end
                 PC_W_START, PC_R_START: begin
                     assert (armed_c[0]);
-                    if (c_mid) assert (since_c <= 12'd2 && f_fall(line, since_c));
+                    if (c_mid) assert (since_c <= H_START - 12'd1 && f_fall(line, since_c));
                     else assert (f_high(line));
                 end
                 PC_W_DATA, PC_R_DATA: begin
                     assert (!armed_c[0]);
-                    if (c_exec) assert (ahead_c == 12'd3 && f_low(line, 16'd2));
-                    if (c_edge) assert (ahead_c >= 12'd1 && ahead_c <= 12'd2 && f_low(line, 16'd5 - ahead_c));
+                    if (c_exec) assert (ahead_c == R_START && f_low(line, D_START / 2 - 16'd1));
+                    if (c_edge) assert (ahead_c >= 12'd1 && ahead_c <= R_START - 12'd1 && f_low(line, LOW_START - ahead_c));
                 end
-                PC_W_LOOP: begin assert (armed_c[0] && f_high(line) && ahead_c == 12'd5); end
-                PC_W_STORE: begin assert (armed_c[0] && f_high(line) && ahead_c == 12'd4); end
+                PC_W_LOOP: begin assert (armed_c[0] && f_high(line) && ahead_c == R_WREST); end
+                PC_W_STORE: begin assert (armed_c[0] && f_high(line) && ahead_c == R_WREST - 12'd1); end
                 // From here to the first read slot the edge is the end of the
                 // recovery after a write slot or after a read slot.
-                PC_CHOICE: begin assert (armed_c[0] && f_high(line) && (ahead_c == 12'd3 || ahead_c == 12'd17)); end
-                PC_LOAD_TOKEN: begin assert (armed_c[0] && f_high(line) && (ahead_c == 12'd2 || ahead_c == 12'd16)); end
-                PC_LOAD_READ: begin assert (armed_c[0] && f_high(line) && (ahead_c == 12'd1 || ahead_c == 12'd15)); end
-                PC_COUNT_READ: begin assert (armed_c[0] && f_high(line) && (ahead_c == 12'd0 || ahead_c == 12'd14)); end
-                PC_R_LOOP: begin assert (armed_c[0] && f_high(line) && ahead_c == 12'd20); end
-                PC_R_STORE: begin assert (armed_c[0] && f_high(line) && ahead_c == 12'd19); end
-                PC_R_JUMP: begin assert (armed_c[0] && f_high(line) && ahead_c == 12'd18); end
+                PC_CHOICE: begin assert (armed_c[0] && f_high(line) && (ahead_c == R_WREST - 12'd2 || ahead_c == R_RREST - 12'd3)); end
+                PC_LOAD_TOKEN: begin assert (armed_c[0] && f_high(line) && (ahead_c == R_WREST - 12'd3 || ahead_c == R_RREST - 12'd4)); end
+                PC_LOAD_READ: begin assert (armed_c[0] && f_high(line) && (ahead_c == R_WREST - 12'd4 || ahead_c == R_RREST - 12'd5)); end
+                PC_COUNT_READ: begin assert (armed_c[0] && f_high(line) && (ahead_c == R_WREST - 12'd5 || ahead_c == R_RREST - 12'd6)); end
+                PC_R_LOOP: begin assert (armed_c[0] && f_high(line) && ahead_c == R_RREST); end
+                PC_R_STORE: begin assert (armed_c[0] && f_high(line) && ahead_c == R_RREST - 12'd1); end
+                PC_R_JUMP: begin assert (armed_c[0] && f_high(line) && ahead_c == R_RREST - 12'd2); end
                 default: ;
             endcase
-            if (at_c == PC_W_START && c_exec) assert (ahead_c == (count_c == 8'd8 ? 12'd148 : 12'd4));
+            if (at_c == PC_W_START && c_exec) assert (ahead_c == (count_c == 8'd8 ? R_WAIT - 12'd2 : R_WREST - 12'd1));
             if (at_c == PC_W_START && c_edge)
-                assert (ahead_c >= 12'd1 && ahead_c <= (count_c == 8'd8 ? 12'd147 : 12'd3));
+                assert (ahead_c >= 12'd1 && ahead_c <= (count_c == 8'd8 ? R_WAIT - 12'd3 : R_WREST - 12'd2));
             if (at_c == PC_R_START && c_exec)
-                assert (count_c == 8'd8 ? (ahead_c == 0 || ahead_c == 12'd13) : ahead_c == 12'd19);
-            if (at_c == PC_R_START && c_edge) assert (ahead_c >= 12'd1 && ahead_c <= 12'd18);
+                assert (count_c == 8'd8 ? (ahead_c == 0 || ahead_c == R_RREST - 12'd7) : ahead_c == R_RREST - 12'd1);
+            if (at_c == PC_R_START && c_edge) assert (ahead_c >= 12'd1 && ahead_c <= R_RREST - 12'd2);
             // A written bit: 54 ticks of the bit, then the line let go.
             if (at_c == PC_W_DATA && c_mid)
-                assert (since_c <= 12'd26 && (wbit ? f_rise(line, since_c, 16'd5)
-                                                   : f_low(line, 16'd5 + since_c)));
+                assert (since_c <= H_WBIT - 12'd1 && (wbit ? f_rise(line, since_c, LOW_START)
+                                                   : f_low(line, LOW_START + since_c)));
             if (at_c == PC_W_REST) begin
                 assert (armed_c[0] == wbit);
-                if (c_exec) assert (ahead_c == 12'd27 && (wbit ? f_high(line) : f_low(line, 16'd32)));
-                if (c_edge) assert (ahead_c >= 12'd1 && ahead_c <= 12'd26
-                                    && (wbit ? f_high(line) : f_low(line, 16'd59 - ahead_c)));
-                if (c_mid) assert (since_c <= 12'd4 && (wbit ? f_high(line)
-                                                             : f_rise(line, since_c, 16'd59)));
+                if (c_exec) assert (ahead_c == R_WBIT && (wbit ? f_high(line) : f_low(line, LOW_START + D_WBIT / 2)));
+                if (c_edge) assert (ahead_c >= 12'd1 && ahead_c <= R_WBIT - 12'd1
+                                    && (wbit ? f_high(line) : f_low(line, LOW_START + D_WBIT - ahead_c)));
+                if (c_mid) assert (since_c <= H_WREST - 12'd1 && (wbit ? f_high(line)
+                                                             : f_rise(line, since_c, LOW_START + D_WBIT)));
             end
             // A bit read: 18 ticks of the target's bit, then the line let go.
             if (at_c == PC_R_DATA && c_mid)
-                assert (since_c <= 12'd8 && (rbit ? f_rise(line, since_c, 16'd5)
-                                                  : f_low(line, 16'd5 + since_c)));
+                assert (since_c <= H_RBIT - 12'd1 && (rbit ? f_rise(line, since_c, LOW_START)
+                                                  : f_low(line, LOW_START + since_c)));
             if (at_c == PC_R_REST) begin
                 assert (armed_c[0] == rbit);
-                if (c_exec) assert (ahead_c == 12'd9 && (rbit ? f_high(line) : f_low(line, 16'd14)));
-                if (c_edge) assert (ahead_c >= 12'd1 && ahead_c <= 12'd8
-                                    && (rbit ? f_high(line) : f_low(line, 16'd23 - ahead_c)));
-                if (c_mid) assert (since_c <= 12'd19 && (rbit ? f_high(line)
-                                                              : f_rise(line, since_c, 16'd23)));
+                if (c_exec) assert (ahead_c == R_RBIT && (rbit ? f_high(line) : f_low(line, LOW_START + D_RBIT / 2)));
+                if (c_edge) assert (ahead_c >= 12'd1 && ahead_c <= R_RBIT - 12'd1
+                                    && (rbit ? f_high(line) : f_low(line, LOW_START + D_RBIT - ahead_c)));
+                if (c_mid) assert (since_c <= H_RREST - 12'd1 && (rbit ? f_high(line)
+                                                              : f_rise(line, since_c, LOW_START + D_RBIT)));
             end
 
             // The slot counter.
@@ -566,17 +602,18 @@ module onewire_ind (input clk);
                     assert (at_t == PC_R_START && (t_exec || t_sync) && count_t == 8'd8);
                 else if (since_c == 12'd2)
                     assert (at_t == PC_R_START && t_mid && edge_t == edge_c && count_t == 8'd8);
-                else if (since_c <= 12'd14)
-                    assert (at_t == PC_R_DATA && edge_t == edge_c + 12'd6 && count_t == 8'd8
-                            && (since_c == 12'd3 ? t_exec : since_c <= 12'd5 ? t_edge : t_mid));
-                else if (since_c <= 12'd43)
-                    assert (at_t == PC_R_REST && edge_t == edge_c + 12'd24 && count_t == 8'd8
-                            && (since_c == 12'd15 ? t_exec : since_c <= 12'd23 ? t_edge : t_mid));
-                else if (since_c == 12'd44)
+                else if (since_c <= D_START + H_RBIT - 12'd1)
+                    assert (at_t == PC_R_DATA && edge_t == edge_c + D_START && count_t == 8'd8
+                            && (since_c == H_START ? t_exec : since_c <= D_START - 12'd1 ? t_edge : t_mid));
+                else if (since_c <= D_START + D_RBIT + H_RREST - 12'd1)
+                    assert (at_t == PC_R_REST && edge_t == edge_c + D_START + D_RBIT && count_t == 8'd8
+                            && (since_c == D_START + H_RBIT ? t_exec
+                                : since_c <= D_START + D_RBIT - 12'd1 ? t_edge : t_mid));
+                else if (since_c == D_START + D_RBIT + H_RREST)
                     assert (at_t == PC_R_LOOP && t_exec && count_t == 8'd8 && !armed_t[0]);
                 else
                     assert (at_t == PC_R_START && count_t == 8'd7 && !armed_t[0]
-                            && (since_c == 12'd45 ? t_exec : t_sync));
+                            && (since_c == D_START + D_RBIT + H_RREST + 12'd1 ? t_exec : t_sync));
             end
             // Until the target has seen the line fall it is armed for a fall.
             if (apart && (at_t == PC_CLAIM || (at_t == PC_PULSE && t_exec)
