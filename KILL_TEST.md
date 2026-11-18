@@ -1397,19 +1397,60 @@ a time, with no new read path into the memory: the hart's own fetch does it.
 The driver has `where()` and `read_program()` for the two uses.
 
 Cost: the hart gains two outputs and no logic. The top gains a 38-bit
-capture register. 38 flops and 1.6% area (317,478 to 322,491 um2
-synthesized, 24,708 cells); the estimated critical path is unchanged within
-noise, at 6.7 ns.
+capture register. On top of the `keep` fix: 1.7% area (319,235 to 324,568
+um2 synthesized, 24,700 cells); the estimated critical path is unchanged, at
+7.05 ns. Lint loses one warning, the hart's unconnected `pc` output, and
+gains none.
 
 Checks: a chip scenario reads a nine-word program back from address 20
 through a stopped hart, then finds two running harts waiting in the `claim`,
 each in its own role, before and after a byte goes through. A cocotb test
-does the same through the driver. Chip scenarios are 68 of 68 with 994 byte
-checks, cocotb is 6 of 6 and the replay is 643 of 643. Planted bugs: 29 of
-29 in the chip, six of them in the new logic; 41 of 41 in the hart; 29
-in the subset proof and 34 in the UART proof, plus their expected
-survivors. Both proofs pass, and the UART harness simulation is clean.
+does the same through the driver. On the design with `keep`: chip scenarios
+are 70 of 70 with 1,028 byte checks, cocotb is 6 of 6 and the replay is 643
+of 643. Planted bugs: 29 of 29 in the chip, six of them in the new logic; 41
+of 41 in the hart; 29 in the subset proof, 37 in the UART proof, 48 in the
+SPI proof and 54 in the 1-Wire proof, plus their expected survivors. All
+four proofs pass and the three harness simulations are clean.
+
+Layout, run locally with the same LibreLane version, PDK and settings as the
+Tiny Tapeout action, on the design with `keep` and the readback, next to the
+last design without either that passed on GitHub:
+
+| | Without (e1b7a20) | With keep and readback |
+|---|---|---|
+| Utilisation | 32.2 % | 33.2 % |
+| Route DRC, Magic DRC, antenna | 0, 0, 0 | 0, 0, 0 |
+| Setup slack, slow corner, 40 ns clock | 11.97 ns | 13.34 ns |
+| Hold slack | 0.118 ns | 0.121 ns |
+| Max slew and max cap warnings | 24 and 1 | 30 and 1 |
+
+Placement differs with every change, which is why the slack moved the other
+way; both are far from failing.
 
 Limits: the memory can be read only through a stopped hart. A word that was
-never written reads as whatever its latches hold. This version has not been
-through the Tiny Tapeout flow yet.
+never written reads as whatever its latches hold.
+
+### Layout time on GitHub
+
+The `keep` commit passed every check but its layout did not finish: GitHub
+stopped the job at its 6-hour limit. An earlier commit, 440ab7c, had been
+stopped the same way. The job logs show where the time goes. Detailed
+routing routes the whole design, adds antenna diodes where a wire needs one,
+and routes again, up to three more times. Each round repeats passes until no
+violation is left. Most layouts get there in a few passes; some keep a
+violation or two the router cannot clear and spend hours on it:
+
+| Layout | Passes in each round | Detailed routing on GitHub |
+|---|---|---|
+| e1b7a20, before `keep` | 9, 8, 6, 4 | 36 min |
+| chip-v2, readback before `keep` | 39, 44, 13 | 224 min |
+| b380833, `keep` | 60 and more, 1 violation left for 5 hours | stopped at 6 hours |
+| `keep` and readback | 14, 9, 7, 4 | not run yet |
+
+The routing is deterministic. A local run on a 24-core machine gives the
+same violation counts as the GitHub run on 4 cores in every pass that can be
+compared, so a local layout shows before a push whether GitHub will finish.
+Which layout gets stuck is not predictable from the change: `keep`, 8
+flip-flops, led to a stuck spot, and adding the readback on top took it out
+again. Every chip
+change is now laid out locally first.

@@ -29,10 +29,12 @@ peripheral, or a witness that checks the traffic without driving anything.
 
 ## Status
 
-The chip without the host readback frame passed the full Tiny Tapeout flow:
-layout, precheck and gate-level test. The readback frame is newer. It passes
-every local check and has not been through the flow yet. Everything below
-was checked in simulation or by formal proof.
+The chip as of commit e1b7a20 passed the full Tiny Tapeout flow: layout,
+precheck and gate-level test. Two chip changes came after it, the `keep`
+flag and the host readback frame. Together they pass every local check and a
+local layout with the same tools and settings, and have not been through
+the flow on GitHub yet. Everything below was checked in simulation or by
+formal proof.
 
 - UART, SPI, I2C, 1-Wire and CAN base frames run end to end through the host port,
   and 1-Wire also at real 1 us timing using the prescaler.
