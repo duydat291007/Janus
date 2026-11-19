@@ -287,6 +287,24 @@ def test_i2c_register_read_with_repeated_start():
 
 
 @case()
+def test_i2c_bus_free_between_stop_and_start():
+    """Two writes queued back to back: the next START waits a half period
+    after the STOP, as the bus free time asks."""
+    prog, bus = i2c_bus()
+    c = Hart(prog, C, bus, tx=[0x42 << 1, 0x11, STOP, 0x42 << 1, 0x22])
+    t = Hart(prog, T, bus, addr=0x42)
+    bus.add(c, t)
+    bus.run(I2C_HALF * 200)
+    assert list(t.rx_q) == [0x84, 0x11, 0x84, 0x22], t.rx_q
+    tr = bus.trace
+    edges = [(i, "S" if not now["SDA"] else "P") for i, (prev, now) in enumerate(zip(tr, tr[1:]))
+             if prev["SCL"] and now["SCL"] and prev["SDA"] != now["SDA"]]
+    assert [e for _, e in edges] == ["S", "P", "S", "P"], edges
+    free = edges[2][0] - edges[1][0]
+    assert free >= I2C_HALF, (free, I2C_HALF)
+
+
+@case()
 def test_i2c_no_target_gives_nack_and_stop():
     prog, bus = i2c_bus()
     c = Hart(prog, C, bus, tx=[0x10 << 1, 0x99])

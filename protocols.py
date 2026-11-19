@@ -65,6 +65,8 @@ def i2c(half):
 
     p.mode(msb=True, clk="SCL", clk_owner=C)
     p.label("idle")
+    # Bus free time: the next START comes at least a half period after a STOP.
+    p.step("SDA", C, 1, half)
     p.claim(C, "SDA")
     p.step("SDA", C, 0, half, sync=True)  # the START trap fires for everyone
 

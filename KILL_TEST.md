@@ -1379,6 +1379,124 @@ Cost at synthesis: 8 flip-flops, a 4-bit count in each hart, and 348 cells
 in all, 0.55 % of the area (317,478 to 319,235 square micrometres). Lint
 gives the same warnings as before, none of them about the new code.
 
+### A fourth protocol proven whole: I2C
+
+`rtl/i2c_ind.sv` proves the I2C program the way the other three proofs
+prove theirs: the real program, taken from the assembler by
+`rtl/gen_i2c_rom.py`, on two real harts. It covers what the others never
+use: two traps that fire on one line's edge while the other line is high
+(START and STOP), an address match after which a target that was not
+addressed steps aside as a witness, branches on the bit just read (the R/W
+bit, ACK and NACK), a choice on the head of the controller's queue between
+data, STOP and RESTART, and clocked bits on open-drain lines, where the
+controller lets the clock go and waits to see it rise.
+
+Both harts read SCL on the same tick, so they run side by side almost
+everywhere: in a clocked bit the target waits for the clock's edge while the
+controller counts down to it. They part in two places. While the controller
+sends a START from `idle`, the target is still in the claim, and the START
+trap brings it along. And when the controller's queue ends a write, with a
+STOP or RESTART entry or with nothing, the target does not own that choice:
+it goes on into the next byte and waits there for the clock. SCL rises once
+more, for the STOP or the repeated START, and the target reads that as the
+byte's first bit. The trap that follows brings both harts back together,
+and because the target is only at the first bit, it counts no broken byte.
+
+Free: the half period, from 8 to 2047 ticks; the target's own address, so
+it may or may not be the one sent; the load address; both queues, with data
+and STOP or RESTART entries arriving at any time; the two unused pins on
+every tick; and the unwritten program words.
+
+What it claims:
+
+- DATA. The target stores the address and every byte written, each the one
+  the controller took from its queue. The controller stores every byte read:
+  the one the target took, or FF when it had none. The controller takes an
+  entry only to send it, or a STOP or RESTART entry that ends a write, and a
+  transaction from `idle` starts only with an entry to send.
+- WIRE. A monitor that sees only SCL and SDA and knows only the textbook
+  rules reads those same bytes, most significant bit first. The target
+  acknowledges the address only when it is its own, and then every byte
+  written; the controller's acknowledge is the top bit of its queue entry. A
+  START or STOP comes only between bytes and only from the controller. And
+  the timing rules in the table below.
+- CLEAN. No violations, no arbitration loss, no other pin touched, and the
+  target never pulls SCL.
+- LIVE. Each hart rests only in a short list of states, and the target is at
+  the controller's word except in the two places above.
+
+A target stores every address byte it sees, its own or not, before the
+match: that is how its host learns what the bus did. A model test already
+asks for it, and the proof claims it.
+
+The invariants were written from the harness simulation's trace. The
+solver's counterexamples then showed six more, each a value it was
+otherwise free to choose: the target's bit count, the level a timed bit is
+about to drive, the source of the bit the target waits for, the R/W bit
+that chose the path, and the monitor's own copy of it. The proof closes in
+16 minutes.
+
+It is not vacuous. 48 planted bugs: 18 in the program, 17 in the hart, 1
+that both harts share (least significant bit first), 8 in the monitor's own
+rules and 4 that weaken its assumptions. 46 break it. Two survive, as they
+should: a claim that ignores a falling line, since the target leaves `idle`
+only through the START trap, which runs first; and an owner that does not
+wait for a released line to rise, since nothing here holds one low. Each
+bug is first simulated in the proof's own harness, and 43 fail one of its
+assertions on a real run, which already means the proof cannot pass; the
+solver breaks the other 3, the ones that weaken an assumption. The solver
+alone took hours on some of them: a bug that needs a whole transaction to
+show is past the 12 steps it checks from reset.
+
+A fifth assumption, that the target's queue keeps its head until popped,
+turned out not to be needed and was removed: the target reads the queue
+only on the tick it takes the byte. `rtl/sim_i2c.sh` simulates the same harness on random
+inputs, with its own scoreboard that decodes the two wires separately: 26
+runs, 2,020 bytes in 920 transactions (226 writes and 124 reads
+acknowledged), 693 NACKs and 86 repeated STARTs over 8.8 million ticks, no
+failure.
+
+#### Fix: the bus was free for only 4 ticks between transactions
+
+Before writing timing invariants, the harness simulation measured each
+timing rule on the wire. All of them scaled with the half period but one:
+from a STOP to the next START the bus was free for 4 ticks, whatever the
+half period. After a STOP the trap sent both harts to `idle`, and a
+controller with an entry queued started again at once. I2C asks for the bus
+to stay free at least as long as the clock's low time, 4.7 µs in standard
+mode, so every device sees it idle; at a 1 µs tick, 4 ticks is 4 µs.
+
+The program now waits a half period at `idle`, with SDA released, before it
+claims the bus. It is 43 instructions, was 42; the chip did not change. A
+new model test queues two writes back to back and checks the gap; it fails
+on the old program. Model tests 42 of 42, replay 645 of 645, chip
+scenarios 70 of 70 and cocotb 6 of 6.
+
+| Rule | On the wire, in ticks | Proven |
+|---|---|---|
+| SCL low | HALF + 2 | at least HALF |
+| SCL high | HALF + 1 | at least HALF |
+| SDA still before SCL rises (setup) | HALF − 1 | at least HALF − 1 |
+| SDA still after SCL falls (hold) | 3 | at least 2 |
+| SCL high before a repeated START or a STOP | HALF | at least HALF |
+| SCL high after a START | HALF + 3 | at least HALF |
+| Bus free, STOP to the next START | was 4, now HALF + 3 | at least HALF |
+
+At a 1 µs tick and HALF = 8, the smallest the proof covers, a 53 kHz clock,
+every standard-mode rule now holds: SCL low 10 µs (4.7 asked), high 9
+(4.0), setup 7 (0.25), START setup 8 (4.7), START hold 11 (4.0), STOP setup
+8 (4.0), bus free 11 (4.7; it was 4), and a data bit is on SDA 3 µs after
+SCL falls (3.45 at most).
+
+Limits: both harts start together and share one clock; one controller and
+one target, so no arbitration between controllers; no device holds SCL low,
+so no clock stretching (the program waits for a stretched clock and a model
+test checks it, but the proof does not cover it); no prescaler; the queues,
+pin rotation and host port are outside it, though the target's queue may
+even lose entries. A read always ends with the
+controller's NACK and a STOP: the program has no repeated START after a
+read. CAN and USB are not proven whole.
+
 ## Chip changes after the first green build
 
 ### Host readback for bring-up
@@ -1445,12 +1563,14 @@ violation or two the router cannot clear and spend hours on it:
 | e1b7a20, before `keep` | 9, 8, 6, 4 | 36 min |
 | chip-v2, readback before `keep` | 39, 44, 13 | 224 min |
 | b380833, `keep` | 60 and more, 1 violation left for 5 hours | stopped at 6 hours |
-| `keep` and readback | 14, 9, 7, 4 | not run yet |
+| f2488cb, `keep` and readback | 14, 9, 7, 4 | whole layout job 119 min |
 
 The routing is deterministic. A local run on a 24-core machine gives the
 same violation counts as the GitHub run on 4 cores in every pass that can be
 compared, so a local layout shows before a push whether GitHub will finish.
 Which layout gets stuck is not predictable from the change: `keep`, 8
 flip-flops, led to a stuck spot, and adding the readback on top took it out
-again. Every chip
-change is now laid out locally first.
+again. Every chip change is now laid out locally first.
+
+The combined design then passed the whole flow on GitHub: layout in 119
+minutes, precheck and the gate-level test.

@@ -29,12 +29,11 @@ peripheral, or a witness that checks the traffic without driving anything.
 
 ## Status
 
-The chip as of commit e1b7a20 passed the full Tiny Tapeout flow: layout,
-precheck and gate-level test. Two chip changes came after it, the `keep`
-flag and the host readback frame. Together they pass every local check and a
-local layout with the same tools and settings, and have not been through
-the flow on GitHub yet. Everything below was checked in simulation or by
-formal proof.
+The chip as of commit f2488cb, with the `keep` flag and the host readback
+frame, passed the full Tiny Tapeout flow: layout, precheck and gate-level
+test. Later commits changed only the I2C program, which a host loads at run
+time, the proofs and the documents. Everything below was checked in
+simulation or by formal proof.
 
 - UART, SPI, I2C, 1-Wire and CAN base frames run end to end through the host port,
   and 1-Wire also at real 1 us timing using the prescaler.
@@ -65,12 +64,24 @@ formal proof.
   least 480 ticks, a presence pulse in its window and those same bytes.
   Building it exposed a bug, now fixed: a second transaction cleared the
   target's queue.
-- A fourth unbounded proof covers timed bits, `sync`, stuffing, CRC, NRZI,
+- A fourth protocol is proven whole: I2C, controller and target, for any
+  half period from 8 ticks and any target address. It covers what the others
+  do not use: START and STOP traps that fire on one line's edge while the
+  other is high, an address match after which a target that was not
+  addressed steps aside, branches on the R/W bit and on ACK or NACK, a
+  choice on the controller's queue between data, STOP and RESTART, and
+  clocked bits on open-drain lines. The target stores the address and every
+  byte written, the controller every byte read, and a monitor that knows
+  only the textbook rules reads the same bytes and acknowledges and checks
+  the timing: SCL low and high, data setup and hold, START setup and hold,
+  STOP setup, and bus free time. Building it exposed a timing bug, now fixed: the
+  next START could come 4 ticks after a STOP, whatever the clock rate.
+- A fifth unbounded proof covers timed bits, `sync`, stuffing, CRC, NRZI,
   the pin pair and break bits for every program in that subset: the two harts
   stay in step, the listener reads what the owner sent, and neither counts a
   violation the other does not. It does not cover the jump on a break, `set`,
   clocked bits, traps, `claim`, `choice`, `match`, arbitration, resync or
-  witnesses, so the other three protocols are not proven whole.
+  witnesses, so the other two protocols, CAN and USB, are not proven whole.
 - For bring-up, the host can read where each hart stands: its program
   counter, role, state and current instruction, captured on one tick. Through
   a stopped hart it can also read the program memory back.
@@ -114,6 +125,7 @@ bash prove_ind.sh d4
 bash prove_uart.sh
 bash prove_spi.sh
 bash prove_onewire.sh
+bash prove_i2c.sh
 bash sim_uart.sh        # the UART proof's harness, simulated on random inputs
 bash final_check.sh     # every planted-bug set and proof task
 bash chip.sh synth
