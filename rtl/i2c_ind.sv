@@ -529,12 +529,12 @@ module i2c_ind (input clk);
             if (at_c >= PC_RS_SDA && at_c <= PC_RS_FALL) assert (!lock);
             if (!lock && at_c >= PC_RS_SDA) begin
                 assert (role_t == 2'd1 && edge_t == now_t);
-                if (at_c == PC_SP_SDA && c_exec) assert (at_t == PC_WRESTART && t_exec);
+                if (at_c == PC_SP_SDA && c_exec) begin assert (at_t == PC_WRESTART && t_exec); end
                 else if ((at_c == PC_SP_SDA && c_mid && since_c == 0)
-                         || (at_c == PC_RS_SDA && c_exec)) assert (at_t == PC_WLOAD && t_exec);
+                         || (at_c == PC_RS_SDA && c_exec)) begin assert (at_t == PC_WLOAD && t_exec); end
                 else if ((at_c == PC_SP_SDA && c_mid && since_c == 12'd1)
                          || (at_c == PC_RS_SDA && c_mid && since_c == 0))
-                    assert (at_t == PC_WBYTE && t_exec);
+                    begin assert (at_t == PC_WBYTE && t_exec); end
                 else assert (at_t == PC_WBYTE && k_t == 0
                              && (t_bs == ((at_c == PC_RS_SCL || at_c == PC_SP_SCL) ? c_mid && since_c >= 12'd2
                                           : (at_c == PC_RS_FALL || at_c == PC_SP_RISE)))
@@ -592,8 +592,8 @@ module i2c_ind (input clk);
             if (m_in) begin
                 assert (m_n == x_mn);
                 if (at_c <= PC_RW || (at_c == PC_RS_FALL && c_mid && since_c >= 12'd1))
-                    assert (m_first);
-                else if (at_c == PC_WACK || at_c == PC_RACK) assert (m_first == !risen);
+                    begin assert (m_first); end
+                else if (at_c == PC_WACK || at_c == PC_RACK) begin assert (m_first == !risen); end
                 else assert (!m_first);
                 if ((at_c >= PC_ASTORE && at_c <= PC_RW) || at_c == PC_WACK || at_c == PC_RACK
                         || (at_c == PC_ABYTE && m_n == 4'd8))

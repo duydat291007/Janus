@@ -279,9 +279,9 @@ module uart_ind (input clk);
             assert (a_boot || a_exec || a_claim || a_edge || a_mid);
             assert (b_boot || b_exec || b_claim || b_edge || b_mid);
             assert (at_a < PROG_LEN && at_b < PROG_LEN);
-            if (a_mid) assert (since_a < h);
+            if (a_mid) begin assert (since_a < h); end
             else assert (ahead_a <= d);
-            if (b_mid) assert (since_b < h);
+            if (b_mid) begin assert (since_b < h); end
             else assert (ahead_b <= d);
 
             // DATA
@@ -295,7 +295,7 @@ module uart_ind (input clk);
 
             // WIRE: what the monitor is about to sample.
             if (oe_a[0]) begin
-                if (m_frame) assert (w == m_bit);
+                if (m_frame) begin assert (w == m_bit); end
                 // A low sample outside a frame can only be a new start bit.
                 else if (!w) assert (m_prev && m_high == BIT && pend);
             end
@@ -409,10 +409,10 @@ module uart_ind (input clk);
             // The monitor against the sender. Before the sender drives, the
             // monitor is held in reset.
             assert (m_high <= BIT);
-            if (at_a == PC_SET) assert (!m_frame && !m_seen && m_prev && m_high == 0);
+            if (at_a == PC_SET) begin assert (!m_frame && !m_seen && m_prev && m_high == 0); end
             else if (m_frame) begin
                 assert (m_seen && m_cell <= 4'd9 && m_q < BIT && (m_cell != 0 || m_q != 0));
-                if (q < h) assert (a_mid_cell && since_a == q);
+                if (q < h) begin assert (a_mid_cell && since_a == q); end
                 else assert (a_past_cell && ahead_a == d - q);
                 if (m_cell == 4'd9) assert (m_high >= m_q);
             end else begin
@@ -427,8 +427,8 @@ module uart_ind (input clk);
                     // Before the first frame: the high samples so far.
                     assert (at_a == PC_IDLE || at_a == PC_CLAIM || at_a == PC_LOAD
                             || at_a == PC_START);
-                    if (at_a == PC_IDLE) assert (m_high == (a_mid ? since_a + 1'b1 : 12'd0));
-                    else if (a_mid) assert (since_a == 0 && m_high == BIT);
+                    if (at_a == PC_IDLE) begin assert (m_high == (a_mid ? since_a + 1'b1 : 12'd0)); end
+                    else if (a_mid) begin assert (since_a == 0 && m_high == BIT); end
                     else assert ({1'b0, m_high} == (ahead_a == 0 ? d : d + 1'b1 - ahead_a));
                 end
             end

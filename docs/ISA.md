@@ -297,6 +297,12 @@ hold trap catches a level held for a count of ticks, like a 1-Wire reset pulse.
 If several traps fire in one tick, only the first edge trap counts, and a hold
 trap overrides it; hold trap 3 overrides hold trap 2.
 
+A hart sees a pin two ticks after it changes, its own drive included. So a
+tick on which the hart itself pulls the pin away from the hold level does not
+count as held, and the count starts again: a trap cannot fire just after the
+hart has started something on that pin, such as a CAN start of frame. An
+open-drain pin driven 1 is released, not pulled.
+
 ## Adversary
 
 Any hart can be made an adversary. The host writes register 11: bit 15

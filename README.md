@@ -31,8 +31,13 @@ peripheral, or a witness that checks the traffic without driving anything.
 
 The chip as of commit f2488cb, with the `keep` flag and the host readback
 frame, passed the full Tiny Tapeout flow: layout, precheck and gate-level
-test. Later commits changed only the I2C program, which a host loads at run
-time, the proofs and the documents. Everything below was checked in
+test. Since then the I2C program, which a host loads at run time, the proofs
+and the documents have changed, and so has one thing in the chip: a hart no
+longer counts a line as held while it pulls the line away itself, which the
+CAN proof showed was needed. That chip was laid out locally with the same
+flow, at a placement density of 40% instead of 45% so that it routes in
+normal time, with clean checks and the gate-level test passing; it goes
+through GitHub's flow on the next push. Everything below was checked in
 simulation or by formal proof.
 
 - UART, SPI, I2C, 1-Wire and CAN base frames run end to end through the host port,
@@ -76,12 +81,23 @@ simulation or by formal proof.
   the timing: SCL low and high, data setup and hold, START setup and hold,
   STOP setup, and bus free time. Building it exposed a timing bug, now fixed: the
   next START could come 4 ticks after a STOP, whatever the clock rate.
-- A fifth unbounded proof covers timed bits, `sync`, stuffing, CRC, NRZI,
+- A fifth protocol is proven whole: CAN, a sender and a receiver, for any bit
+  time from 11 ticks. It covers what the others do not use: a claim that picks
+  the role by whether a frame is queued, bit stuffing sent and checked, a CRC
+  computed as the bits go and checked by the receiver, a loop counted by a
+  received length, resynchronisation, the receiver's ACK inside the sender's
+  frame, and a hold trap back to `idle`. Each hart stores every field the
+  sender took, and a monitor that knows only the textbook rules for a base
+  data frame reads the same fields, correct stuffing and CRC, and bits of
+  exactly the bit time. Building it exposed a bug in the hart, now fixed: the
+  hold trap could fire just after a start of frame went out, and both harts
+  then received a phantom frame.
+- A sixth unbounded proof covers timed bits, `sync`, stuffing, CRC, NRZI,
   the pin pair and break bits for every program in that subset: the two harts
   stay in step, the listener reads what the owner sent, and neither counts a
   violation the other does not. It does not cover the jump on a break, `set`,
   clocked bits, traps, `claim`, `choice`, `match`, arbitration, resync or
-  witnesses, so the other two protocols, CAN and USB, are not proven whole.
+  witnesses, so USB, the one protocol left, is not proven whole.
 - For bring-up, the host can read where each hart stands: its program
   counter, role, state and current instruction, captured on one tick. Through
   a stopped hart it can also read the program memory back.
@@ -126,6 +142,7 @@ bash prove_uart.sh
 bash prove_spi.sh
 bash prove_onewire.sh
 bash prove_i2c.sh
+bash prove_can.sh
 bash sim_uart.sh        # the UART proof's harness, simulated on random inputs
 bash final_check.sh     # every planted-bug set and proof task
 bash chip.sh synth

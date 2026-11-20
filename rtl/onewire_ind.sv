@@ -351,11 +351,11 @@ module onewire_ind (input clk);
                 PC_CLAIM, PC_PULSE: begin
                     if (first_run) assert (m_ph == 2'd0);
                     if (!(at_c == PC_PULSE && c_mid)) begin
-                        if (first_run) assert (m_t == 10'd1023);
+                        if (first_run) begin assert (m_t == 10'd1023); end
                         else assert (m_ph == 2'd3 && m_n == 0 && !m_first && ahead_c <= R_RREST - 12'd4
                                      && (m_t == 10'd1023 || {1'b0, m_t} + {1'b0, ac} >= {1'b0, SLOT_MIN}));
                     end else if (since_c == 0) begin
-                        if (first_run) assert (m_t == 10'd1023);
+                        if (first_run) begin assert (m_t == 10'd1023); end
                         else assert (m_ph == 2'd3 && m_n == 0 && !m_first && m_t >= SLOT_MIN);
                     end else begin
                         assert (m_t == sc);
@@ -367,7 +367,7 @@ module onewire_ind (input clk);
                 PC_SUSPECT_END: begin assert (m_ph == 2'd0 && m_t == HOLD_SUSPECT[9:0] + D_SUSP[9:0] + 10'd2 - ac); end
                 PC_RESET: begin assert (m_ph == 2'd0 && m_t == (c_exec ? HOLD_RESET[9:0] + 10'd1 : HOLD_RESET[9:0] + 10'd2 + sc)); end
                 PC_RELEASE: begin
-                    if (!c_mid) assert (m_ph == 2'd0 && m_t == W_RESET - ac);
+                    if (!c_mid) begin assert (m_ph == 2'd0 && m_t == W_RESET - ac); end
                     else begin
                         assert (m_t == W_RESET + sc && m_ph == (since_c != 0));
                         if (since_c != 0) assert (m_h == sc[6:0]);
@@ -375,16 +375,16 @@ module onewire_ind (input clk);
                 end
                 PC_LOAD_PRESENCE: begin assert (m_ph == 2'd1 && m_t == W_RESET + D_RELEASE[9:0] - ac && m_h == D_RELEASE[6:0] - ac[6:0]); end
                 PC_PRESENCE: begin
-                    if (!c_mid) assert (m_ph == 2'd1 && m_t == W_RESET + D_RELEASE[9:0] - ac && m_h == D_RELEASE[6:0] - ac[6:0]);
-                    else if (since_c == 0) assert (m_ph == 2'd1 && m_t == W_RESET + D_RELEASE[9:0] && m_h == D_RELEASE[6:0]);
+                    if (!c_mid) begin assert (m_ph == 2'd1 && m_t == W_RESET + D_RELEASE[9:0] - ac && m_h == D_RELEASE[6:0] - ac[6:0]); end
+                    else if (since_c == 0) begin assert (m_ph == 2'd1 && m_t == W_RESET + D_RELEASE[9:0] && m_h == D_RELEASE[6:0]); end
                     else assert (m_ph == 2'd2 && m_t == sc);
                 end
                 PC_STORE_PRESENCE: begin assert (m_ph == 2'd2 && m_t == D_PRES[9:0] - ac); end
                 PC_WAIT: begin
-                    if (!c_mid) assert (m_ph == 2'd2 && m_t == D_PRES[9:0] - ac);
+                    if (!c_mid) begin assert (m_ph == 2'd2 && m_t == D_PRES[9:0] - ac); end
                     else begin
                         assert (m_t == D_PRES[9:0] + sc);
-                        if (since_c == 0) assert (m_ph == 2'd2);
+                        if (since_c == 0) begin assert (m_ph == 2'd2); end
                         else assert (m_ph == 2'd3 && m_n == 0 && m_first);
                     end
                 end
@@ -392,7 +392,7 @@ module onewire_ind (input clk);
                     assert (m_ph == 2'd3 && m_n == 0 && m_first && m_t == D_PRES[9:0] + D_WAIT[9:0] - ac);
                 end
                 PC_W_START: begin
-                    if (!c_mid || since_c == 0) assert (m_t == (count_c == 8'd8 ? D_PRES[9:0] + D_WAIT[9:0] : SLOT_W) - (c_mid ? 10'd0 : ac));
+                    if (!c_mid || since_c == 0) begin assert (m_t == (count_c == 8'd8 ? D_PRES[9:0] + D_WAIT[9:0] : SLOT_W) - (c_mid ? 10'd0 : ac)); end
                     else assert (m_t == sc);
                 end
                 PC_W_DATA, PC_R_DATA: begin assert (m_t == (c_mid ? D_START[9:0] + sc : D_START[9:0] - ac)); end
@@ -485,12 +485,12 @@ module onewire_ind (input clk);
                 PC_NOARB, PC_CLAIM: begin assert (f_high(line) && armed_c[0]); end
                 PC_PULSE: begin
                     assert (armed_c[0]);
-                    if (c_mid) assert (since_c <= HS && f_fall(line, since_c));
+                    if (c_mid) begin assert (since_c <= HS && f_fall(line, since_c)); end
                     else assert (f_high(line));
                 end
                 PC_SUSPECT: begin
                     assert (!armed_c[0]);
-                    if (c_exec) assert (since_c == 0 && f_low(line, HOLD_SUSPECT));
+                    if (c_exec) begin assert (since_c == 0 && f_low(line, HOLD_SUSPECT)); end
                     else assert (since_c <= H_SUSP - 12'd1 && f_low(line, HOLD_SUSPECT + 16'd1 + since_c));
                 end
                 PC_SUSPECT_END: begin
@@ -501,12 +501,12 @@ module onewire_ind (input clk);
                 end
                 PC_RESET: begin
                     assert (!armed_c[0]);
-                    if (c_exec) assert (since_c == 0 && f_low(line, HOLD_RESET));
+                    if (c_exec) begin assert (since_c == 0 && f_low(line, HOLD_RESET)); end
                     else assert (since_c <= H_RESET - 12'd1 && f_low(line, HOLD_RESET + 16'd1 + since_c));
                 end
                 PC_RELEASE: begin
                     assert (!armed_c[0]);
-                    if (c_mid) assert (since_c <= H_RELEASE - 12'd1 && f_rise(line, since_c, LOW_RESET));
+                    if (c_mid) begin assert (since_c <= H_RELEASE - 12'd1 && f_rise(line, since_c, LOW_RESET)); end
                     else begin
                         assert (f_low(line, LOW_RESET - ahead_c));
                         assert (c_exec ? ahead_c == R_RESET : (ahead_c >= 12'd1 && ahead_c <= R_RESET - 12'd1));
@@ -515,7 +515,7 @@ module onewire_ind (input clk);
                 PC_LOAD_PRESENCE: begin assert (armed_c[0] && f_high(line) && ahead_c == R_RELEASE); end
                 PC_PRESENCE: begin
                     assert (armed_c[0]);
-                    if (c_mid) assert (since_c <= H_PRES - 12'd1 && f_fall(line, since_c));
+                    if (c_mid) begin assert (since_c <= H_PRES - 12'd1 && f_fall(line, since_c)); end
                     else begin
                         assert (f_high(line));
                         assert (c_exec ? ahead_c == R_RELEASE - 12'd1 : (ahead_c >= 12'd1 && ahead_c <= R_RELEASE - 12'd2));
@@ -524,7 +524,7 @@ module onewire_ind (input clk);
                 PC_STORE_PRESENCE: begin assert (!armed_c[0] && f_low(line, D_PRES / 2 - 16'd1) && ahead_c == R_PRES); end
                 PC_WAIT: begin
                     assert (!armed_c[0]);
-                    if (c_mid) assert (since_c <= H_WAIT - 12'd1 && f_rise(line, since_c, D_PRES - 16'd1));
+                    if (c_mid) begin assert (since_c <= H_WAIT - 12'd1 && f_rise(line, since_c, D_PRES - 16'd1)); end
                     else begin
                         assert (f_low(line, D_PRES - 16'd1 - ahead_c));
                         assert (c_exec ? ahead_c == R_PRES - 12'd1 : (ahead_c >= 12'd1 && ahead_c <= R_PRES - 12'd2));
@@ -534,7 +534,7 @@ module onewire_ind (input clk);
                 PC_COUNT_WRITE: begin assert (armed_c[0] && f_high(line) && ahead_c == R_WAIT - 12'd1); end
                 PC_W_START, PC_R_START: begin
                     assert (armed_c[0]);
-                    if (c_mid) assert (since_c <= H_START - 12'd1 && f_fall(line, since_c));
+                    if (c_mid) begin assert (since_c <= H_START - 12'd1 && f_fall(line, since_c)); end
                     else assert (f_high(line));
                 end
                 PC_W_DATA, PC_R_DATA: begin
@@ -598,7 +598,7 @@ module onewire_ind (input clk);
                 if (at_c >= PC_W_START) assert (count_t == count_c);
                 // At a synchronised step the target waits for the edge and
                 // sees it two ticks after the controller drives it.
-                if (syncs && (c_edge || (c_mid && since_c <= 12'd1))) assert (t_sync);
+                if (syncs && (c_edge || (c_mid && since_c <= 12'd1))) begin assert (t_sync); end
                 else assert (s_t == s_c && edge_t == edge_c);
                 if (syncs && c_edge) assert (edge_t == edge_c);
             end
@@ -618,25 +618,25 @@ module onewire_ind (input clk);
                         || (at_t == PC_R_START && (t_exec || t_sync) && count_t == 8'd8));
             if (at_c == PC_PULSE && c_mid) begin
                 if (at_t <= PC_PULSE) begin
-                    if (since_c <= 12'd1) assert (at_t == PC_CLAIM && t_claim);
-                    else if (since_c == 12'd2) assert (at_t == PC_PULSE && t_exec);
+                    if (since_c <= 12'd1) begin assert (at_t == PC_CLAIM && t_claim); end
+                    else if (since_c == 12'd2) begin assert (at_t == PC_PULSE && t_exec); end
                     else assert (at_t == PC_PULSE && t_mid && edge_t == edge_c + 12'd1);
                 end else if (since_c == 0)
-                    assert ((at_t == PC_COUNT_READ && t_exec)
-                            || (at_t == PC_R_START && (t_exec || t_sync) && count_t == 8'd8));
+                    begin assert ((at_t == PC_COUNT_READ && t_exec)
+                            || (at_t == PC_R_START && (t_exec || t_sync) && count_t == 8'd8)); end
                 else if (since_c == 12'd1)
-                    assert (at_t == PC_R_START && (t_exec || t_sync) && count_t == 8'd8);
+                    begin assert (at_t == PC_R_START && (t_exec || t_sync) && count_t == 8'd8); end
                 else if (since_c == 12'd2)
-                    assert (at_t == PC_R_START && t_mid && edge_t == edge_c && count_t == 8'd8);
+                    begin assert (at_t == PC_R_START && t_mid && edge_t == edge_c && count_t == 8'd8); end
                 else if (since_c <= D_START + H_RBIT - 12'd1)
-                    assert (at_t == PC_R_DATA && edge_t == edge_c + D_START && count_t == 8'd8
-                            && (since_c == H_START ? t_exec : since_c <= D_START - 12'd1 ? t_edge : t_mid));
+                    begin assert (at_t == PC_R_DATA && edge_t == edge_c + D_START && count_t == 8'd8
+                            && (since_c == H_START ? t_exec : since_c <= D_START - 12'd1 ? t_edge : t_mid)); end
                 else if (since_c <= D_START + D_RBIT + H_RREST - 12'd1)
-                    assert (at_t == PC_R_REST && edge_t == edge_c + D_START + D_RBIT && count_t == 8'd8
+                    begin assert (at_t == PC_R_REST && edge_t == edge_c + D_START + D_RBIT && count_t == 8'd8
                             && (since_c == D_START + H_RBIT ? t_exec
-                                : since_c <= D_START + D_RBIT - 12'd1 ? t_edge : t_mid));
+                                : since_c <= D_START + D_RBIT - 12'd1 ? t_edge : t_mid)); end
                 else if (since_c == D_START + D_RBIT + H_RREST)
-                    assert (at_t == PC_R_LOOP && t_exec && count_t == 8'd8 && !armed_t[0]);
+                    begin assert (at_t == PC_R_LOOP && t_exec && count_t == 8'd8 && !armed_t[0]); end
                 else
                     assert (at_t == PC_R_START && count_t == 8'd7 && !armed_t[0]
                             && (since_c == D_START + D_RBIT + H_RREST + 12'd1 ? t_exec : t_sync));

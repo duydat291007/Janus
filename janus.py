@@ -264,7 +264,12 @@ class Hart:
                 self._fire(goto)
                 break
         for i, (pin, val, ticks, goto) in enumerate(self.prog.holds):
-            held = self.held.get(i, 0) + 1 if self.pin[pin] == val else 0
+            # Not held while this hart pulls the line away itself: it sees its
+            # own drive two ticks late. An open-drain 1 is a release.
+            drive = self.out.get(pin)
+            pulling = drive is not None and drive != val and not (
+                self.prog.pins[pin] == OPEN_DRAIN and drive == 1)
+            held = self.held.get(i, 0) + 1 if self.pin[pin] == val and not pulling else 0
             self.held[i] = held
             if held == ticks:
                 self._fire(goto)

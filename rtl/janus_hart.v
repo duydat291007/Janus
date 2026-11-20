@@ -70,6 +70,7 @@ module janus_hart (
     output     [3:0]  dbg_prev,
     output     [31:0] dbg_held,
     output     [3:0]  dbg_keep,
+    output     [11:0] dbg_last_fall,
     output            dbg_clean
 `endif
 );
@@ -186,6 +187,7 @@ module janus_hart (
     assign dbg_prev = prev;
     assign dbg_held = {held1, held0};
     assign dbg_keep = keep_n;
+    assign dbg_last_fall = last_fall;
     // Everything the restricted program subset can never change from reset.
     assign dbg_clean = !c_rs_en && !lf_valid && c_lose == WITNESS
         && !c_l2_en && c_div == 0 && div_cnt == 0
@@ -512,9 +514,14 @@ module janus_hart (
                     fire_to = tw[14:9];
                 end
             end
+            // A line counts as held only while this hart is not itself pulling
+            // it away from the level: the hart sees its own drive two ticks
+            // late, and a trap firing then would cut off what it just started.
+            // An open-drain pin driven 1 is released, not pulled.
             tw = cfg2;
             if (tw[15]) begin
-                if (pin[tw[7:6]] == tw[5]) begin
+                if (pin[tw[7:6]] == tw[5] && !(oe_r[tw[7:6]] && ov_r[tw[7:6]] != tw[5]
+                                               && !(od_mask[tw[7:6]] && ov_r[tw[7:6]]))) begin
                     if (held0 != 16'hFFFF) held0 = held0 + 1'b1;
                 end else held0 = 0;
                 if (held0 == cfg4) begin
@@ -524,7 +531,8 @@ module janus_hart (
             end
             tw = cfg3;
             if (tw[15]) begin
-                if (pin[tw[7:6]] == tw[5]) begin
+                if (pin[tw[7:6]] == tw[5] && !(oe_r[tw[7:6]] && ov_r[tw[7:6]] != tw[5]
+                                               && !(od_mask[tw[7:6]] && ov_r[tw[7:6]]))) begin
                     if (held1 != 16'hFFFF) held1 = held1 + 1'b1;
                 end else held1 = 0;
                 if (held1 == cfg5) begin

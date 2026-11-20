@@ -1497,6 +1497,175 @@ even lose entries. A read always ends with the
 controller's NACK and a STOP: the program has no repeated START after a
 read. CAN and USB are not proven whole.
 
+### A fifth protocol proven whole: CAN
+
+`rtl/can_ind.sv` proves the CAN program the way the other four proofs prove
+theirs: the real program, 35 words taken from the assembler by
+`rtl/gen_can_rom.py`, on two real harts. Both start as possible senders. Hart
+a has a queue of frames to send; hart b's queue stays empty, so it always
+ends up the receiver. It covers what the others never use: a claim that
+decides the role by whether the hart has a frame to send, bit stuffing sent
+and checked, a CRC computed as the bits go and checked by the receiver, a
+loop whose count comes from a received field, resynchronisation on falling
+edges, an ACK slot the receiver drives inside the sender's frame, and a hold
+trap that brings both back to `idle` after 20 recessive bit times.
+
+The receiver is the sender two ticks late, from the middle of the start of
+frame to the ACK slot: it sees the bus two ticks after the sender drives it,
+and so does each step it takes. The two part around the ACK. The receiver
+pulls the ACK slot low two ticks into it, as it sees the slot two ticks
+late, and the sender, a listener there, moves its bit edge to that fall from
+a bit time of 16 ticks on. From the ACK on, the sender runs 4 ticks late and
+the receiver 2.
+
+Free: the bit time, from 11 to 2047 ticks; the load address; hart a's queue,
+with any entries arriving, changing or leaving at any time; the three unused
+pins on every tick; and the unwritten program words. Assumed: both harts
+leave reset together with the program's hold trap set; when hart a takes a
+control field, an entry is there with RTR and IDE clear, as a host that
+queues base data frames gives it; and the bus is open drain, low exactly when
+a hart pulls it low.
+
+What it claims:
+
+- DATA. Each hart stores each field as hart a sent it: the top three bits of
+  the identifier, the other eight, the control field and every data byte,
+  and pushes exactly when it stores.
+- WIRE. A monitor that sees only the bus and knows only the textbook rules
+  for a base data frame reads a dominant start of frame, an identifier,
+  dominant RTR and IDE bits, a length and as many data bytes as it asks for
+  (8 at most), each byte the one hart a took, then a CRC equal to the
+  monitor's own CRC-15 of the bits before it, after five equal bits always a
+  stuff bit of the other value, then a recessive CRC delimiter, a dominant
+  ACK slot and 11 recessive bits. Every bit lasts exactly the bit time: the
+  bus changes only where a bit starts, except for the receiver's ACK, which
+  starts and ends two ticks into its bits.
+- CLEAN. No violations, no arbitration loss, no queue cleared, no other pin
+  touched.
+- LIVE. Each hart rests only in the states of timed bits and the claim, and
+  between frames both wait at `idle`.
+
+Below 11 ticks a bit is not exact: at 8 to 10 ticks the bit after the
+control field runs one or two ticks long, because the six instructions
+between the last control bit and the next data bit take longer than the
+half bit left. 11 ticks at the chip's 25 MHz is 2.27 Mbit/s, above classic
+CAN's 1 Mbit/s.
+
+The invariants were written from the harness simulation's trace, then from
+the solver's counterexamples. Most of those were values the solver was free
+to choose and a real run never reaches: the monitor in its unused fourth
+state, a counter past the instruction's last bit, the bus history just
+before a start of frame, the monitor's CRC before the first bit. Two came
+from 12-bit and 16-bit sums that wrap: at long bit times a fall a bit time
+old and the idle count near 65,535 looked like small numbers. One was a real
+bug, below.
+
+The proof runs with Bitwuzla at depth 4 and closes in 9 minutes. Yices, which
+the other proofs use, did not finish the same last query in 4 hours 40
+minutes. Depth 4 is as sound as the 12 of the other proofs; it needs
+stronger invariants, which this one has.
+
+It is not vacuous. 36 planted bugs: 13 in the program, 13 in the hart, 1
+that both harts share (least significant bit first), 5 in the monitor's own
+rules and 4 that weaken its assumptions. 34 break it. Two survive, as they
+should: a receiver that never finds a bad CRC, since every frame here is
+good; and a wrong input lag in `sync`, which the resynchronisation right
+after the start of frame corrects. 31 fail one of the harness's assertions
+on a real run, which already means the proof cannot pass; the solver breaks
+the other 3, which weaken an assumption. One of the hart bugs undoes the fix
+below.
+
+A fourth assumption, that an entry stays at the head of hart a's queue until
+it is popped, turned out not to be needed and was removed: hart a reads its
+queue only to claim the bus and on the tick it takes a byte, and a byte taken
+from an empty queue is FF, which the claims follow.
+
+`rtl/sim_can.sh` simulates the same harness on random inputs, with its own
+scoreboard: 54 runs at bit times from 11 to 2047 ticks, 856 frames (107 with
+fewer data bytes queued than their length asks for, sent as FF) and 7,267
+fields received over 19.3 million ticks, no failure. 24 of the runs queue each
+frame one to eight ticks before the hold trap would fire, at bit times 11, 16
+and 49, where the bug below was.
+
+#### Fix: the hold trap could cut off a start of frame
+
+The proof found it. The hold trap sends both harts back to `idle` after 20
+recessive bit times. A hart counts that time from the bus as it sees it, two
+ticks late, so its count ran on for two ticks after it pulled the bus low
+itself. If the host's frame arrived so that hart a drove its start of frame
+on the tick before its count reached 20 bit times, the trap fired on the next
+tick: hart a went back to `idle` with the bus still low. Both harts then
+claimed the receiver role, read the start of frame and received a frame of
+recessive bits, and each pushed a three-bit identifier field, 111, to its
+host before a stuff error sent it to `BAD`. Hart a's frame was not lost: it
+went out after the next 20 idle bits. Random tests never hit the one tick it
+takes. The harness simulation now does: `+race=K` queues each frame K ticks
+before the trap, and K = 5 reproduced it at bit times 11, 16 and 49.
+
+A hart now does not count a line as held while it is itself pulling it away
+from the hold level; an open-drain pin driven 1 is released, not pulled.
+`janus.py` has the same rule. 1-Wire is unaffected: its traps watch for low,
+and its open-drain harts never drive high. USB's idle timeout starts again
+two ticks sooner when the hart drives DM itself. UART, SPI and I2C use no
+hold traps. Cost: 383 um2 per hart, 0.6% (67,251 to 67,634 um2
+synthesized). Model tests 42 of 42, 16 of 16 for CAN, 17 of 17 for USB, 9
+of 9 for 1-Wire and 6 of 6 for the adversary; replay 645 of 645; chip
+scenarios 70 of 70 with 1,028 byte checks; cocotb 6 of 6; the 1-Wire proof
+passes again and its harness simulation is clean.
+
+Laid out locally with the same flow and settings as GitHub's, the fixed chip
+did not route at the old 45% density: after 33 passes of its first round the
+router still had 144 violations, where a good layout clears its first round
+in about a dozen, the pattern that ran GitHub's job out of time before. At
+42% it routed in rounds of 15, 10, 7 and 3 passes, and at 40% in 11, 11 and
+4, so `PL_TARGET_DENSITY_PCT` is now 40. No logic changed. The layout at 40%:
+
+| | f2488cb, 45% | Hold fix, 40% |
+|---|---|---|
+| Utilisation | 33.2 % | 32.7 % |
+| Route DRC, Magic DRC, antenna, LVS | 0, 0, 0, 0 | 0, 0, 0, 0 |
+| Setup slack, slow corner, 40 ns clock | 13.34 ns | 11.42 ns |
+| Hold slack | 0.121 ns | 0.104 ns |
+| Max slew and max cap warnings | 30 and 1 | 40 and 0 |
+
+The gate-level test passes 6 of 6 on its netlist.
+
+The trap can still fire on the tick before hart a would drive, which only
+sends hart a back to claim again, and at hart b on the tick after, as b sees
+the bus low a tick later; b then claims the receiver role on the next tick as
+usual. The proof covers both.
+
+#### Finding: an `else` after an assertion hid it from the harness simulations
+
+In SystemVerilog, an `else` after `assert (x);` belongs to the assertion, as
+what to run when it fails. Yosys reads it as the `if`'s `else`, so every
+proof checked what it says. Icarus Verilog follows the standard: in the
+harness simulations, an assertion written that way never reported a
+failure, and the branch after it never ran. Five harnesses had it: CAN 30
+times, 1-Wire 24, UART 7, I2C 5 and SPI 2. Each such assertion is now
+wrapped in `begin` and `end`, which both tools read the same way; yosys
+builds the same checks from the wrapped files. With every assertion live,
+the UART, SPI, 1-Wire and I2C harness simulations still pass, so nothing was
+hiding there. In the CAN harness the first live run caught the receiver's
+trap firing one tick into a start of frame, which the claims then allowed.
+
+The full final check on the design with both changes: planted bugs 29 of 29
+in the chip and 41 of 41 in the hart, and in the proofs 29 for the subset,
+37 for UART, 48 for SPI, 54 for 1-Wire, 46 for I2C and 34 for CAN, plus
+their expected survivors; the UART, SPI, 1-Wire, I2C and CAN proofs pass, the
+subset proof passes at `dwell` 4 and fails at 3 as before, and all 13 of its
+coverage points are reached; the five harness simulations are clean. The
+I2C proof took 30 minutes on a loaded machine, so the final check now gives
+it an hour.
+
+Limits: one sender and one receiver, so no arbitration, which is the next
+stage; every frame is good, so the receiver's checks of a bad CRC, a stuff
+error and a missing ACK are not covered, though model tests check them; no
+error frames or retransmission, as in the program; base data frames only;
+both harts start together, share one clock and see the bus with no
+propagation delay; no prescaler; the queues, pin rotation and host port are
+outside it. USB is not proven whole.
+
 ## Chip changes after the first green build
 
 ### Host readback for bring-up

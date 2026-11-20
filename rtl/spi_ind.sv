@@ -424,9 +424,9 @@ module spi_ind (input clk);
                 // Counting to the leading edge. The target is still on the
                 // bit before for two ticks after a trailing edge.
                 if (cnt == d - 12'd2)
-                    assert ((t_bs && k_t == prev_k) || (k_c == 0 && t_as && k_t == 0));
+                    begin assert ((t_bs && k_t == prev_k) || (k_c == 0 && t_as && k_t == 0)); end
                 else if (cnt == d - 12'd3)
-                    assert ((t_gap && k_t == prev_k) || (k_c == 0 && t_as && k_t == 0));
+                    begin assert ((t_gap && k_t == prev_k) || (k_c == 0 && t_as && k_t == 0)); end
                 else assert (t_as && k_t == k_c);
             end
             if (c_bw) assert (k_t == k_c && (cnt >= d - 12'd3 ? t_as : t_bs));
