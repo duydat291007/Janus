@@ -1630,6 +1630,12 @@ in about a dozen, the pattern that ran GitHub's job out of time before. At
 
 The gate-level test passes 6 of 6 on its netlist.
 
+On GitHub, at fb666c7, the layout then passed in 1 h 55 min and the
+gate-level test in 2 min. Two runs there failed for reasons outside the
+design: that commit's first attempt lost its PDK download to a dropped
+connection before synthesis began, and the gate-level job of the I2C commit
+(fd26068) hung for 6 hours in `apt-get` before any test ran.
+
 The trap can still fire on the tick before hart a would drive, which only
 sends hart a back to claim again, and at hart b on the tick after, as b sees
 the bus low a tick later; b then claims the receiver role on the next tick as
@@ -1657,6 +1663,28 @@ subset proof passes at `dwell` 4 and fails at 3 as before, and all 13 of its
 coverage points are reached; the five harness simulations are clean. The
 I2C proof took 30 minutes on a loaded machine, so the final check now gives
 it an hour.
+
+#### Two senders, in simulation
+
+The proof keeps hart b's queue empty. `rtl/tb_can_arb.v` gives both harts a
+queue. Each round queues a frame for each, the second from 6 ticks before to
+6 ticks after the first, and checks that both harts store exactly the frames
+that went out, the winner's when they arbitrate (the lower identifier), that
+the loser's queue is cleared, and that neither counts a violation. A hart
+that claims the bus before it sees the other's start of frame drives its own
+up to 4 ticks later, as it sees the bus 2 ticks late and runs 4 instructions
+from the claim to its start of frame; from 5 ticks apart the later one sees
+the first start of frame in time and sends after it. A sender does not
+resynchronise, so in arbitration the two harts' bits stay that far apart.
+
+From a bit time of 12 ticks every skew works: `rtl/sim_can_arb.sh` makes 84
+runs at bit times from 12 to 217 ticks, 1,296 rounds, 931 of them arbitrated
+and 290 sent one after the other, with no failure. At 11 ticks, two starts of
+frame 4 ticks apart make the earlier sender count a violation, though both
+harts still store the right frames and the right hart wins. The later
+sender's bits change 4 ticks into each of the earlier one's, one tick before
+its sample point; which check counts the violation is not yet traced. So two
+senders need a bit time of at least 12 ticks, 2.08 Mbit/s at 25 MHz.
 
 Limits: one sender and one receiver, so no arbitration, which is the next
 stage; every frame is good, so the receiver's checks of a bad CRC, a stuff

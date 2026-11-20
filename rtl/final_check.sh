@@ -29,6 +29,7 @@ echo "--- I2C harness simulation"; bash sim_i2c.sh 2>&1 | tail -3
 echo "--- CAN proof bugs"; echo "broke $(grep -c BROKE "$OUT/f_can.txt")"; grep -vE "^BROKE" "$OUT/f_can.txt" | cut -c1-80
 echo "--- CAN proof"; timeout 7200 bash prove_can.sh 2>&1 | grep -E "DONE" | sed 's/.*\] *//' | cut -c1-40
 echo "--- CAN harness simulation"; bash sim_can.sh 2>&1 | tail -3
+echo "--- CAN with two senders"; bash sim_can_arb.sh 2>&1 | tail -3
 echo "--- UART proof"; timeout 2400 bash prove_uart.sh 2>&1 | grep -E "DONE" | sed 's/.*\] *//' | cut -c1-40
 echo "--- UART harness simulation"; bash sim_uart.sh 2>&1 | tail -3
 L="$HOME/janus-tools/build/ind"

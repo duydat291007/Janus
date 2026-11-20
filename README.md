@@ -36,9 +36,9 @@ and the documents have changed, and so has one thing in the chip: a hart no
 longer counts a line as held while it pulls the line away itself, which the
 CAN proof showed was needed. That chip was laid out locally with the same
 flow, at a placement density of 40% instead of 45% so that it routes in
-normal time, with clean checks and the gate-level test passing; it goes
-through GitHub's flow on the next push. Everything below was checked in
-simulation or by formal proof.
+normal time, with clean checks and the gate-level test passing. On GitHub,
+at fb666c7, its layout passed in 1 h 55 min and so did the gate-level test.
+Everything below was checked in simulation or by formal proof.
 
 - UART, SPI, I2C, 1-Wire and CAN base frames run end to end through the host port,
   and 1-Wire also at real 1 us timing using the prescaler.
@@ -91,7 +91,9 @@ simulation or by formal proof.
   data frame reads the same fields, correct stuffing and CRC, and bits of
   exactly the bit time. Building it exposed a bug in the hart, now fixed: the
   hold trap could fire just after a start of frame went out, and both harts
-  then received a phantom frame.
+  then received a phantom frame. Arbitration between two senders is not yet
+  proven; in simulation it picks the right winner at every skew two starts of
+  frame can have, from a bit time of 12 ticks.
 - A sixth unbounded proof covers timed bits, `sync`, stuffing, CRC, NRZI,
   the pin pair and break bits for every program in that subset: the two harts
   stay in step, the listener reads what the owner sent, and neither counts a
