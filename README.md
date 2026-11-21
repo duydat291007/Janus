@@ -37,7 +37,8 @@ longer counts a line as held while it pulls the line away itself, which the
 CAN proof showed was needed. That chip was laid out locally with the same
 flow, at a placement density of 40% instead of 45% so that it routes in
 normal time, with clean checks and the gate-level test passing. On GitHub,
-at fb666c7, its layout passed in 1 h 55 min and so did the gate-level test.
+at fb666c7, it passed the full Tiny Tapeout flow: layout in 1 h 55 min,
+precheck and gate-level test.
 Everything below was checked in simulation or by formal proof.
 
 - UART, SPI, I2C, 1-Wire and CAN base frames run end to end through the host port,

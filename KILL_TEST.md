@@ -1630,8 +1630,9 @@ in about a dozen, the pattern that ran GitHub's job out of time before. At
 
 The gate-level test passes 6 of 6 on its netlist.
 
-On GitHub, at fb666c7, the layout then passed in 1 h 55 min and the
-gate-level test in 2 min. Two runs there failed for reasons outside the
+On GitHub, at fb666c7, it then passed the full flow: layout in 1 h 55 min,
+the precheck, and the gate-level test in 2 min; the next commit, c207a95,
+passed it again. Two runs there failed for reasons outside the
 design: that commit's first attempt lost its PDK download to a dropped
 connection before synthesis began, and the gate-level job of the I2C commit
 (fd26068) hung for 6 hours in `apt-get` before any test ran.
@@ -1685,6 +1686,19 @@ harts still store the right frames and the right hart wins. The later
 sender's bits change 4 ticks into each of the earlier one's, one tick before
 its sample point; which check counts the violation is not yet traced. So two
 senders need a bit time of at least 12 ticks, 2.08 Mbit/s at 25 MHz.
+
+The proof of this stage has started. `rtl/can_arb_ind.sv` runs the program on
+two harts with both queues free and states the claims: the monitor reads the
+winner's frame (the smaller identifier), a sender stores each field as it
+took it and both harts store the same fields, only the loser loses and has
+its queue cleared, and the bus changes only where the winner's bits start,
+or while two still send, where either sender's do; the ACK falls in its slot
+at most 6 ticks in and lasts a bit. It assumes that two frames that
+arbitrate have different identifiers. `rtl/sim_can_arb_ind.sh` checks every
+claim once a tick: 75 runs, every skew from 6 ticks either way and runs where
+both queues refill as soon as they empty, with no failure; three claims
+planted wrong are each caught. The solver's base case passes; the invariants
+the induction needs are not written yet.
 
 Limits: one sender and one receiver, so no arbitration, which is the next
 stage; every frame is good, so the receiver's checks of a bad CRC, a stuff
