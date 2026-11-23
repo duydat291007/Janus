@@ -1680,28 +1680,72 @@ resynchronise, so in arbitration the two harts' bits stay that far apart.
 
 From a bit time of 12 ticks every skew works: `rtl/sim_can_arb.sh` makes 84
 runs at bit times from 12 to 217 ticks, 1,296 rounds, 931 of them arbitrated
-and 290 sent one after the other, with no failure. At 11 ticks, two starts of
-frame 4 ticks apart make the earlier sender count a violation, though both
-harts still store the right frames and the right hart wins. The later
-sender's bits change 4 ticks into each of the earlier one's, one tick before
-its sample point; which check counts the violation is not yet traced. So two
-senders need a bit time of at least 12 ticks, 2.08 Mbit/s at 25 MHz.
+and 290 sent one after the other, with no failure. At 11 ticks a bit is read
+5 ticks into it, which a hart sees 2 ticks late: 3 ticks into the bit on the
+bus. A sender 4 ticks later is then still holding its start of frame
+dominant, so the earlier sender reads the first identifier bit as dominant,
+drops out of an arbitration it was still in, and as a receiver that read
+that bit wrong it counts violations; at a skew of 4 the other way the other
+hart does the same. The sample point less the two ticks of lag must come no
+earlier than the later sender's edge, so half a bit must be at least 4 + 2
+ticks: two senders need a bit time of at least 12 ticks, 2.08 Mbit/s at
+25 MHz.
 
-The proof of this stage has started. `rtl/can_arb_ind.sv` runs the program on
-two harts with both queues free and states the claims: the monitor reads the
+#### The arbitration proof
+
+`rtl/can_arb_ind.sv` runs the program on two harts with both queues free,
+bit times from 12 to 2047 ticks. It claims that the monitor reads the
 winner's frame (the smaller identifier), a sender stores each field as it
-took it and both harts store the same fields, only the loser loses and has
-its queue cleared, and the bus changes only where the winner's bits start,
-or while two still send, where either sender's do; the ACK falls in its slot
-at most 6 ticks in and lasts a bit. It assumes that two frames that
-arbitrate have different identifiers. `rtl/sim_can_arb_ind.sh` checks every
-claim once a tick: 75 runs, every skew from 6 ticks either way and runs where
-both queues refill as soon as they empty, with no failure; three claims
-planted wrong are each caught. The solver's base case passes; the invariants
-the induction needs are not written yet.
+took it and both harts store the same fields, only the loser loses and its
+queue is cleared as it does, and that the bus changes only where the
+winner's bits start, or while two still send, where either sender's do; the
+ACK falls in its slot at most 6 ticks in and lasts a bit. It assumes that two
+frames that arbitrate have different identifiers. It passes: k-induction at
+depth 4 with Bitwuzla, 26 minutes (`rtl/prove_can_arb.sh`).
 
-Limits: one sender and one receiver, so no arbitration, which is the next
-stage; every frame is good, so the receiver's checks of a bad CRC, a stuff
+The invariants describe each hart by its role and its offset: how many ticks
+its bits start after the monitor's. The first start of frame sets 0, a second
+sender's its skew (up to 4), a receiver 2. A loser keeps its own until it
+moves to 2 ticks after the winner's, which an earlier loser does only when
+that is within a quarter bit. In the ACK slot the sender listens too, and
+moves to the receiver's ACK when that is close enough, so after a frame the
+two harts are 2 ticks apart, or up to 4 when the sender could not move. A
+hart at offset o holds what a sender on the monitor's grid held o ticks ago,
+so each is checked against the monitor's state o ticks back. That state is
+rebuilt from the monitor now and its state in the bit before, which one
+register keeps: a bit is at least 12 ticks, so 6 ticks back from a bit's
+start is past the middle of the bit before. A six-deep history of the monitor
+would do the same in simulation, but past the induction's depth of 4 the
+solver could fill it with anything. The monitor also logs each field as it
+reads its last bit, before any hart stores it, and each hart's stores are
+checked against that log. `rtl/sim_can_arb_ind.sh` checks every claim and
+invariant once a tick: 75 runs, every skew from 6 ticks either way and runs
+where both queues refill as soon as they empty, with no failure.
+
+`rtl/mutate_can_arb.sh` plants 17 bugs, and each one breaks the proof. 14
+fail in simulation: arbitration never switched on or left on, the loser
+turned into a witness, kept sending or kept its queue, a sender that loses
+on the wrong reading, no stuffing, no resynchronisation, a claim that ignores
+a falling line, a recessive ACK, a monitor that crowns the larger identifier
+or puts the winner on the earlier sender's grid, and another device on the
+bus. The solver takes the other three. Bit times of 11 ticks break the claim
+that no hart counts a violation, as traced above. Frames that may share an
+identifier, and a hart that claims as a sender after seeing a start of frame,
+break the invariants that state those limits: the induction can no longer
+close, though it gives no run from reset.
+
+Finding: the identifier assumption had a hole. It said that a hart taking its
+second identifier byte while the other already had its own takes a different
+one. Two harts whose starts of frame come on the same tick take that byte on
+the same tick, and then neither has the other's yet. The induction found the
+two equal; the assumption now covers taking both at once.
+
+Finding: no claim said that the loser's queue is cleared, only that no other
+queue is. The proof's queues are free inputs, so a loser that kept its frame
+changed nothing the claims looked at. The claim is now there, and a hart
+planted to keep its queue breaks it.
+
+Limits: two harts; every frame is good, so the receiver's checks of a bad CRC, a stuff
 error and a missing ACK are not covered, though model tests check them; no
 error frames or retransmission, as in the program; base data frames only;
 both harts start together, share one clock and see the bus with no
