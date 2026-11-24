@@ -83,7 +83,7 @@ module tb_usb_ind;
                  ticks, dut.vb.tc, dut.vb.tail_ok, dut.vb.aft_ok, dut.vb.p, dut.vb.en, dut.vb.snd, dut.vb.st, dut.vb.t, dut.vb.ph, dut.vb.bi, dut.vb.run, dut.vb.nb,
                  dut.vb.pl_cur[9:4], dut.vb.pl_cur[3:0], dut.vb.at, dut.vb.k, dut.vb.s, dut.vb.since,
                  dut.vb.code[23:8], dut.vb.v_scrc, dut.vb.v_crc, dut.vb.code[7:4], dut.vb.v_rl, dut.vb.v_rval, dut.vb.v_rv,
-                 dut.vb.code[7:0], dut.vb.line, dut.f_crc, dut.f_rl, dut.f_rval, dut.f_rv);
+                 dut.vb.code[7:0], dut.vb.line, dut.f_code[23:8], dut.f_code[7:4], dut.f_code[3], dut.f_code[2]);
     end
 
     // +gaps: the J before each host packet that follows the handshake.

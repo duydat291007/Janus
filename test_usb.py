@@ -248,6 +248,26 @@ def host_waits_two_bit_times_after_the_handshake():
 
 
 @case
+def idle_bus_is_undriven():
+    """Once the line has been J for longer than in any packet, no hart drives
+    either wire, until the next packet."""
+    queues = {"a transaction": out_queue(DATA), "a bad CRC16": out_queue(DATA, 1),
+              "a token alone": token_bytes() + [STOP],
+              "the chip's CRC16": token_bytes() + [STOP] + data_bytes(DATA)[:-2] + [RESTART]}
+    for name, queue in queues.items():
+        for roles in (("A", "B", WITNESS), ("A", WITNESS)):     # with a device, and with none
+            bus = ref.UsbBus()
+            harts = janus(bus, *roles, tx=queue)
+            quiet = 0                        # ticks of J since the last end of packet
+            for _ in range(BIT * 400):
+                bus.tick()
+                line = (bus.wire["DP"], bus.wire["DM"])
+                quiet = quiet + 1 if line == ref.J else 0
+                if quiet > 8 * BIT:          # longer than any run of J in a packet
+                    assert not any(v is not None for h in harts for v in h.out.values()), (name, roles)
+
+
+@case
 def data_packet_answered_whatever_the_gap():
     """The device tells data from a token by its PID, so a data packet that
     comes late, even across the hold trap's 18 bit times, is answered."""

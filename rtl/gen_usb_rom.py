@@ -18,19 +18,18 @@ from janus import PUSH_PULL  # noqa: E402
 
 NAMES = ["NRZI", "PAIR", "RESYNC", "POLY", "WIDTH0", "RESID", "XOR", "ONERR", "ONBRK",
          "CLAIM", "STUFF", "SYNC0", "SYNC6", "SYNCK", "PLOAD", "PID2", "PBR", "PCNT", "PID6",
-         "PSTORE", "WIDTH",
-         "CSTOP", "CRST", "BLOAD", "BYTE", "BSTORE", "BJUMP",
-         "CRC", "EOP", "EOP2", "UNSTUFF", "J", "TURN", "NODATA", "CRCBAD",
+         "WIDTH", "STORE", "CSTOP", "CRST", "BLOAD", "BYTE", "BJUMP",
+         "CRC", "EOP", "EOP2", "J", "TURN", "NODATA", "CRCBAD",
          "ALOAD", "ASYNC0", "ASYNC6", "ASYNCK", "APID", "ASTORE", "AEOP", "AJ", "ATURN",
-         "END", "TMO", "LWIDTH", "LBAD"]
+         "END", "END2", "LOOP", "TMO", "LWIDTH", "LBAD"]
 SHAPE = (["mode"] * 9 + ["claim", "mode"]
-         + ["bits"] * 3 + ["load", "bits", "branch", "counter", "bits", "store", "mode"]
-         + ["choice", "choice", "load", "bits", "store", "branch"]
-         + ["bits"] * 3 + ["mode", "bits", "bits", "branch", "branch"]
+         + ["bits"] * 3 + ["load", "bits", "branch", "counter", "bits", "mode", "store"]
+         + ["choice", "choice", "load", "bits", "branch"]
+         + ["bits"] * 5 + ["branch", "branch"]
          + ["load"] + ["bits"] * 4 + ["store"] + ["bits"] * 3
-         + ["branch", "branch", "mode", "branch"])
-LABELS = {"packet": 9, "pid": 18, "byte": 21, "crc": 27, "eop": 28, "eop2": 29,
-          "end": 44, "tmo": 45, "lost": 46}
+         + ["set", "set", "branch", "branch", "mode", "branch"])
+LABELS = {"packet": 9, "pid": 18, "byte": 20, "crc": 26, "eop": 27, "eop2": 28,
+          "end": 42, "tmo": 45, "lost": 46}
 DWELL = 0x7FF  # a bit's length: the low 11 bits of the word
 BITS, BRANCH, CHOICE = 1, 5, 6
 ONERR, ONBRK = 7, 8   # the mode words that name the error and break handlers

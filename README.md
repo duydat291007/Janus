@@ -106,7 +106,8 @@ Everything below was checked in simulation or by formal proof.
   turnaround in which the device answers. A monitor that knows only the
   textbook rules for a low-speed packet reads SYNC, the bytes the host took,
   correct stuffing and CRC16, two bit times of SE0, and at least two bit
-  times between packets; the device answers each data packet exactly when
+  times between packets. No one drives the bus from two bit times after a
+  packet until the next one. The device answers each data packet exactly when
   its CRC16 checks, stores every byte, and the host stores the ACK. Nothing is
   assumed about what the host queues or when. Building it exposed three
   faults in the program, now fixed: the device counted packets to find the
@@ -114,9 +115,7 @@ Everything below was checked in simulation or by formal proof.
   after the ACK the host's next packet could follow after a little over one
   bit time, where the USB 2.0 specification asks for two; and the host gave
   up on a handshake after 17 bit times, not 18. The device now tells a data
-  packet by its PID, still within 48 instructions. The price is that the host
-  no longer lets go of the idle bus: it drives J from its first packet on,
-  except while it waits for a handshake. A USB host should not.
+  packet by its PID, still within 48 instructions.
 - Another unbounded proof covers timed bits, `sync`, stuffing, CRC, NRZI,
   the pin pair and break bits for every program in that subset: the two harts
   stay in step, the listener reads what the owner sent, and neither counts a

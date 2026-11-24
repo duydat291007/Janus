@@ -1810,25 +1810,49 @@ and still fits in the 48 instructions rule 4 allows:
 - The hold trap is 18 bit times. It matters only while a handshake is due;
   with none due, every hart claims again on the next tick, quickly enough
   that a device whose trap fires as a packet starts still joins it.
-- Leaving out the `done` block, which let go of the pins and cleared the
-  count, paid for the rest: the counter is already 0 on every way back to
-  the claim, and a `loop` branch takes it from 1 to 0 after a data packet.
+- Every way back to the claim has the counter at 0: a `loop` branch at `end`
+  takes it from 1 to 0 after a data packet, so the old `done` block and its
+  second counter load are gone.
 
-That last point has a cost, and it is a step back from the old program. The
-old one let go of both pins after a handshake, a bad CRC16 or an idle
-timeout, so the idle bus was undriven. The new host drives J from its first
-packet on, for good, and lets go only while it waits for a handshake (checked
-in the model, at the end of a run of 1,000 bit times). A USB driver should turn
-off after one bit time of J: a device could not signal on the bus without a
-fight, and the host could not see it unplugged. Restoring the release would
-take about two instructions, and the program is at the limit of 48.
+The first version of this (772f9b6) had no room left to let go of the pins.
+Its host drove J from its first packet on, for good, where the old program
+left the idle bus undriven: a device could not have signalled on the bus
+without a fight, and the host could not have seen it unplugged. The program
+now lets go again, at `end`, with two `set` instructions, after every packet
+but a good data packet, where the host lets go for the handshake. The two
+words came from:
 
-`python test_usb.py` passes all 19 cases with the new program, two of them
-new: the next token comes 2.12 bit times after the ACK, and a data packet is
+- one `store` for the PID and for the bytes after it, where there were two;
+- no `mode` to switch the coder off at the end of packet. The coder now runs
+  on through the two bits of J, a 0 and a 1. They take the residual 0x800D of
+  a good CRC16 to 0x003E, and that map is one-to-one (checked over all 65,536
+  values), so the program compares with 0x003E and, when the J arrives as
+  sent, accepts and refuses the same packets. The ACK is now checked for
+  stuffing too.
+
+That changes what a fault in those bits does. Of the 140 single-bit faults in
+the host's side of a transaction, six end differently than at 772f9b6, all
+flagged before and now. In the J after the data packet (two positions) the
+device answered; now it refuses, and the host counts up to 8 violations
+before it is back at its claim. At the end of the token (three: the second SE0
+bit and the two J bits) the transaction went through; now it is lost. In the
+J after the ACK the ACK was received before and now, with fewer violations.
+The next transaction is clean after every one of them.
+
+Merging the seven 0s of the ACK's SYNC into one instruction would also have
+freed a word, but then the host waits for an edge on every one of them, and
+`check_sync.py` rejects a sync instruction of more than one bit.
+
+The host still drives J for about a bit and a half after a packet, and two bit
+times after a good data packet, where the specification asks for one.
+
+`python test_usb.py` passes all 20 cases with the new program, three of them
+new: the next token comes 2.12 bit times after the ACK, a data packet is
 answered at every gap tried, across the 17 and 18 bit times where the old
-program's timeout fell. The timeout case was registered as 16 to 18 bit
-times, before the specification was read; it now requires 18 to 19, and the
-host flags the missing handshake after 18.19. The 14 planted bugs of
+program's timeout fell, and no hart drives a wire once the bus has been J for
+8 bit times (772f9b6 fails that one). The timeout case was registered as 16 to
+18 bit times, before the specification was read; it now requires 18 to 19, and
+the host flags the missing handshake after 18.19. The 14 planted bugs of
 `python test_usb.py mutants` are all caught. `python test_adversary.py`
 passes: the host owns one more bit, so its sweep is 140 positions, and a
 fault in the J after the ACK is flagged as the start of a stray packet. Two
@@ -1836,7 +1860,7 @@ of its checks changed for that: the answered data may now be followed by the
 stray byte, so it is looked for anywhere in what the device stored, not at
 the end, and the last bit that must be noticed is counted from one bit
 further back, which is the same bit as before. The
-hart replay passes 751 recordings, the chip scenarios 70 with 1,028 byte
+hart replay passes 771 recordings, the chip scenarios 70 with 1,028 byte
 checks, and cocotb 6 of 6.
 
 #### The proof
@@ -1861,8 +1885,9 @@ What it claims:
   packet ends with two more bytes and its CRC16 checks; the device's packet
   is ACK alone.
 - TIMING. Every packet starts at least two bit times after the last one
-  ended. Only the sender drives the line in a packet, and two drivers never
-  meet.
+  ended. Only the sender drives the line in a packet, two drivers never
+  meet, and nobody drives either wire from two bit times after an end of
+  packet to the next packet, nor before the first.
 - HANDSHAKE. The device answers each data packet whose CRC16 checks, 2 bit
   times and 2 ticks after its end of packet, and at no other time.
 - DATA. The device stores each byte of the host's packets as the monitor
@@ -1880,25 +1905,28 @@ one register holding the bit before, with a step relation between the two.
 Between packets each hart runs a fixed sequence after it reads the last J,
 then claims. A device whose hold trap fires on a packet's second tick runs
 `tmo` and claims, joins a tick later than usual, and is two ticks behind by
-its first bit's middle. One fact the solver could not find alone: each CRC
+its first bit's middle. The coder after the end of packet is a fixed function
+of where the bus is: the two bits of J, and after a good data packet the
+device's SYNC and ACK, are the same every time. One fact the solver could not find alone: each CRC
 bit the chip sends feeds back `xor`'s bit for that position, whatever the
 register held, so after k bits the register's low k bits follow a fixed
 pattern, and after 16 it holds 0x800D, the residual.
 
-It passes: k-induction at depth 4 with Bitwuzla, 8 minutes
+It passes: k-induction at depth 4 with Bitwuzla, 9 minutes
 (`rtl/prove_usb.sh`). `rtl/sim_usb.sh` checks every claim and invariant once
 a tick: 42 runs at bit times from 11 to 2047 ticks, 5 with the queue driven
 at random every tick and 5 that hold each packet back to start on the tick
-the device's hold trap fires, where 39 packets started in all; 804 data packets (428
-with a bad CRC16, 202 queued up to 60 bit times after the token), 356
-answered, 9,179 bytes stored, 17.5 million ticks, no failure.
+the device's hold trap fires, where 45 packets started in all; 804 data
+packets (402 with a bad CRC16, 181 queued up to 60 bit times after the token),
+387 answered, 9,183 bytes stored, 18.0 million ticks, no failure.
 
-`rtl/mutate_usb.sh` plants 34 bugs: 20 in the program, 9 in the hart, 4 in
-the monitor's own rules and 1 that weakens an assumption. 33 break the proof.
-32 fail one of the harness's assertions on a real run, among them a data PID
+`rtl/mutate_usb.sh` plants 38 bugs: 24 in the program, 9 in the hart, 4 in
+the monitor's own rules and 1 that weakens an assumption. 37 break the proof.
+36 fail one of the harness's assertions on a real run, among them a data PID
 read from only one of its two bits or with the branch inverted, every packet
-taken as data, no second J after the ACK, the count left at 1 after it, and
-a counter that ignores its mask; the solver breaks bit times of 10 ticks,
+taken as data, no second J after the ACK, the count left at 1 after it, a
+counter that ignores its mask, and either wire, or both after a token, not let
+go (those three also fail the claim that nobody drives the idle bus); the solver breaks bit times of 10 ticks,
 where the instructions between bytes no longer fit in half a bit. No hold
 trap breaks the hold counter's invariant, not a claim: with a device that
 always answers, no claim needs the trap. One survives, as it should: a
