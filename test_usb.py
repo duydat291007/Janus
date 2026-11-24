@@ -216,7 +216,10 @@ def host_reports_a_timeout_when_no_device_answers():
     assert flagged is not None, "the host never flagged the missing handshake"
     waited = (flagged - line_end) / BIT
     print(f"     timeout flagged {waited:.2f} bit times after the EOP")
-    assert 16 <= waited <= 18, waited
+    # Registered as 16 to 18 bit times, before the specification was read:
+    # 7.1.19.1 has a device give up between 16 and 18, but the host wait at
+    # least 18 before it starts a new transaction.
+    assert 18 <= waited <= 19, waited
     assert (host.violations, witness.violations) == (1, 1)
     assert list(host.rx_q) == []
     # The host goes straight on to its next transaction. A device is there now.
@@ -227,6 +230,35 @@ def host_reports_a_timeout_when_no_device_answers():
     assert pids == [ref.PID_OUT, ref.PID_DATA0, ref.PID_OUT, ref.PID_DATA0, ref.PID_ACK], pids
     assert device.acks == 1 and list(host.rx_q) == [ACK_BYTE]
     assert (host.violations, witness.violations, bus.contentions) == (1, 1, 0)
+
+
+@case
+def host_waits_two_bit_times_after_the_handshake():
+    """Two transactions queued at once: the host's next token comes at
+    least two bit times after the ACK's end of packet (7.1.18.1)."""
+    bus = ref.UsbBus()
+    host, device = janus(bus, "A", "B", tx=out_queue(DATA) + out_queue([1, 2]))
+    bus.run(BIT * 700)
+    pids = [p["pid"] for p in ref.usb_decode(bus.trace, BIT)]
+    assert pids == [ref.PID_OUT, ref.PID_DATA0, ref.PID_ACK] * 2, pids
+    bits = turnaround(bus, 2)        # the end of the first ACK to the next K
+    print(f"     next token {bits:.2f} bit times after the ACK")
+    assert bits >= 2, bits
+    assert (host.violations, device.violations, bus.contentions) == (0, 0, 0)
+
+
+@case
+def data_packet_answered_whatever_the_gap():
+    """The device tells data from a token by its PID, so a data packet that
+    comes late, even across the hold trap's 18 bit times, is answered."""
+    for gap in list(range(2 * BIT, 40 * BIT, 3 * BIT)) + list(range(17 * BIT - 3, 19 * BIT + 4)):
+        bus = ref.UsbBus()
+        device, witness = janus(bus, "B", WITNESS)
+        bus.add(ref.UsbSender(bus, host_packets(DATA), BIT, gap=gap))
+        bus.run(BIT * 400 + gap)
+        check_transaction(ref.usb_decode(bus.trace, BIT), DATA)
+        assert list(device.rx_q) == token_bytes() + data_bytes(DATA), gap
+        assert (device.violations, witness.violations, bus.contentions) == (0, 0, 0), gap
 
 
 @case

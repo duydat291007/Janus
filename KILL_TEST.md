@@ -1752,6 +1752,171 @@ both harts start together, share one clock and see the bus with no
 propagation delay; no prescaler; the queues, pin rotation and host port are
 outside it. USB is not proven whole.
 
+### The sixth protocol proven whole: USB
+
+`rtl/usb_ind.sv` proves the low-speed USB program the way the other five
+proofs prove theirs: the real program, 48 words taken from the assembler by
+`rtl/gen_usb_rom.py`, on two real harts. Hart a is the host, with a queue;
+hart b is the device, whose one byte to send, the ACK, is in the program. It
+covers what no other proof reaches: the complementary pin pair, NRZI coding,
+stuffing of ones only, a CRC that restarts at all ones and is sent changed by
+`xor`, the CRC16 the host hart computes and sends on RESTART, break bits and
+a listener's jump on a break, a packet's type read from its PID into the
+counter, the turnaround in which the device takes the bus, and a hold trap
+that ends the host's wait for a handshake.
+
+#### Three findings, and the program they changed
+
+Writing the proof for the program as it stood turned up three things, all
+checked against the USB 2.0 specification itself (section 7.1.18.1 on page
+168, and 7.1.19.1), which also settles the three assumptions the hold-out
+test above left unchecked:
+
+- The hold trap race. The device took the second host packet of a
+  transaction as its data packet, counting packets, and the hold trap ended
+  a transaction after 17 idle bit times. Suppose the data packet started
+  exactly 17 bit times after the token's end of packet. On that one tick the
+  device's hold trap fired and the host's did not: the host was already
+  pulling DM low for its SYNC, and a hart's own pull does not count as the
+  line held, the fix the CAN proof needed. The device took the data packet as
+  a token; the host waited for a handshake that never came and counted a
+  timeout. A shared timeout that one side sees two ticks late always has such
+  a tick, so no change to the timeout could remove it.
+- After the device's ACK, a host with its next transaction already queued
+  started it after the larger of half a bit and 10 ticks, and a bit and 2
+  ticks: just over one bit time. The specification asks the host for at
+  least two bit times of J between packets.
+- The host gave up on a handshake after 17 bit times; the specification says
+  the host waits at least 18 (a device gives up between 16 and 18).
+
+The other assumptions hold: the device answers 2 bit times and 2 ticks after
+the end of packet, within the 2 to 6.5 bit times allowed (7.5 with a captive
+cable), and the low-speed rate tolerance is 1.5%.
+
+The program now decides what a packet is by its PID, as a USB device does,
+and still fits in the 48 instructions rule 4 allows:
+
+- A data PID (DATA0, DATA1, DATA2, MDATA) has its two lowest bits set, and
+  they are the first two sent. The PID goes out as two bits, then six. In
+  between, a branch on the last bit and a `counter` that takes the first bit
+  from the received byte leave the counter at 1 for a data PID and 0 for any
+  other. At the end of packet the device answers a data packet whose CRC16
+  checks, however long after the token it came: no timeout decides what a
+  packet is, and the race is gone.
+- After the ACK the host holds J for a second bit, as it already did
+  after its own packets. The device, listening, lets go of both pins as that
+  bit starts, and the host's next packet comes at least two bit times after
+  the end of packet.
+- The hold trap is 18 bit times. It matters only while a handshake is due;
+  with none due, every hart claims again on the next tick, quickly enough
+  that a device whose trap fires as a packet starts still joins it.
+- Leaving out the `done` block, which let go of the pins and cleared the
+  count, paid for the rest: the counter is already 0 on every way back to
+  the claim, and a `loop` branch takes it from 1 to 0 after a data packet.
+
+That last point has a cost, and it is a step back from the old program. The
+old one let go of both pins after a handshake, a bad CRC16 or an idle
+timeout, so the idle bus was undriven. The new host drives J from its first
+packet on, for good, and lets go only while it waits for a handshake (checked
+in the model, at the end of a run of 1,000 bit times). A USB driver should turn
+off after one bit time of J: a device could not signal on the bus without a
+fight, and the host could not see it unplugged. Restoring the release would
+take about two instructions, and the program is at the limit of 48.
+
+`python test_usb.py` passes all 19 cases with the new program, two of them
+new: the next token comes 2.12 bit times after the ACK, and a data packet is
+answered at every gap tried, across the 17 and 18 bit times where the old
+program's timeout fell. The timeout case was registered as 16 to 18 bit
+times, before the specification was read; it now requires 18 to 19, and the
+host flags the missing handshake after 18.19. The 14 planted bugs of
+`python test_usb.py mutants` are all caught. `python test_adversary.py`
+passes: the host owns one more bit, so its sweep is 140 positions, and a
+fault in the J after the ACK is flagged as the start of a stray packet. Two
+of its checks changed for that: the answered data may now be followed by the
+stray byte, so it is looked for anywhere in what the device stored, not at
+the end, and the last bit that must be noticed is counted from one bit
+further back, which is the same bit as before. The
+hart replay passes 751 recordings, the chip scenarios 70 with 1,028 byte
+checks, and cocotb 6 of 6.
+
+#### The proof
+
+Free: the bit time, from 11 to 2047 ticks; the load address; the host's
+queue, with any entries arriving, changing or leaving at any time, data,
+STOP or RESTART; the two unused pins on every tick; and the unwritten program
+words. Assumed: both harts leave reset together with the program's hold trap
+set; the device's queue is empty; and DP and DM are push-pull with the USB
+pull resistors, so the undriven line is J. Nothing is assumed about what the
+host queues or when.
+
+What it claims:
+
+- WIRE. A monitor that sees only DP and DM and knows only the textbook rules
+  for a low-speed packet reads the line as J, K or SE0, never SE1, and J
+  between packets. Each packet is SYNC (KJKJKJKK), a PID and further bytes,
+  least significant bit first, with a 0 stuffed after every six 1s, then SE0
+  for exactly two bit times after a whole byte. Every bit lasts exactly the
+  bit time: the line changes only where a bit starts. Each byte the host
+  sends is the one it took, FF from an empty queue. After RESTART the host's
+  packet ends with two more bytes and its CRC16 checks; the device's packet
+  is ACK alone.
+- TIMING. Every packet starts at least two bit times after the last one
+  ended. Only the sender drives the line in a packet, and two drivers never
+  meet.
+- HANDSHAKE. The device answers each data packet whose CRC16 checks, 2 bit
+  times and 2 ticks after its end of packet, and at no other time.
+- DATA. The device stores each byte of the host's packets as the monitor
+  read it, once, before the next byte or the end of packet; the host stores
+  the ACK.
+- VIOLATIONS. Each hart counts exactly the data packets whose CRC16 fails,
+  within two bit times of their end, and nothing else.
+- CLEAN. No hart changes its role, takes as a witness or touches another
+  pin, and the device never takes from its queue.
+
+The invariants follow the CAN arbitration proof: each hart is checked
+against the monitor, the packet's sender against the monitor now and the
+listener against the monitor two ticks back, rebuilt from the monitor now and
+one register holding the bit before, with a step relation between the two.
+Between packets each hart runs a fixed sequence after it reads the last J,
+then claims. A device whose hold trap fires on a packet's second tick runs
+`tmo` and claims, joins a tick later than usual, and is two ticks behind by
+its first bit's middle. One fact the solver could not find alone: each CRC
+bit the chip sends feeds back `xor`'s bit for that position, whatever the
+register held, so after k bits the register's low k bits follow a fixed
+pattern, and after 16 it holds 0x800D, the residual.
+
+It passes: k-induction at depth 4 with Bitwuzla, 8 minutes
+(`rtl/prove_usb.sh`). `rtl/sim_usb.sh` checks every claim and invariant once
+a tick: 42 runs at bit times from 11 to 2047 ticks, 5 with the queue driven
+at random every tick and 5 that hold each packet back to start on the tick
+the device's hold trap fires, where 39 packets started in all; 804 data packets (428
+with a bad CRC16, 202 queued up to 60 bit times after the token), 356
+answered, 9,179 bytes stored, 17.5 million ticks, no failure.
+
+`rtl/mutate_usb.sh` plants 34 bugs: 20 in the program, 9 in the hart, 4 in
+the monitor's own rules and 1 that weakens an assumption. 33 break the proof.
+32 fail one of the harness's assertions on a real run, among them a data PID
+read from only one of its two bits or with the branch inverted, every packet
+taken as data, no second J after the ACK, the count left at 1 after it, and
+a counter that ignores its mask; the solver breaks bit times of 10 ticks,
+where the instructions between bytes no longer fit in half a bit. No hold
+trap breaks the hold counter's invariant, not a claim: with a device that
+always answers, no claim needs the trap. One survives, as it should: a
+listener that does not check that a break bit is SE0, since with a correct
+sender it always is.
+
+The invariants took about 40 counterexamples to write, nearly all values the
+solver was free to choose and a run never reaches. One was a bug in the
+harness itself: a count of ticks since a bit was read, taken before the read,
+wrapped to a large number and switched a hart's drive check off.
+
+Limits: two harts and no witness; with a device always there the host never
+waits out the hold trap, so a missing handshake is checked by `python
+test_usb.py`, not here; the device answers any good data packet, without
+filtering by address or endpoint, as before; both harts start together,
+share one clock and see the line with no propagation delay; no prescaler;
+the queues, pin rotation and host port are outside it.
+
 ## Chip changes after the first green build
 
 ### Host readback for bring-up

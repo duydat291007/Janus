@@ -10,6 +10,7 @@ bash mutate_onewire.sh > "$OUT/f_onewire.txt" 2>&1 &
 bash mutate_i2c.sh > "$OUT/f_i2c.txt" 2>&1 &
 bash mutate_can.sh > "$OUT/f_can.txt" 2>&1 &
 bash mutate_can_arb.sh > "$OUT/f_can_arb.txt" 2>&1 &
+bash mutate_usb.sh > "$OUT/f_usb.txt" 2>&1 &
 wait
 echo "--- chip bugs"; echo "caught $(grep -c CAUGHT "$OUT/f_chip.txt")"; grep -vE "^CAUGHT" "$OUT/f_chip.txt" | cut -c1-80
 echo "--- hart bugs"; head -1 "$OUT/f_rtl.txt"; echo "caught $(grep -c CAUGHT "$OUT/f_rtl.txt")"; grep -vE "^CAUGHT|^baseline" "$OUT/f_rtl.txt" | cut -c1-80
@@ -34,6 +35,9 @@ echo "--- CAN with two senders"; bash sim_can_arb.sh 2>&1 | tail -3
 echo "--- CAN arbitration proof bugs"; echo "broke $(grep -c BROKE "$OUT/f_can_arb.txt")"; grep -vE "^BROKE" "$OUT/f_can_arb.txt" | cut -c1-80
 echo "--- CAN arbitration proof"; timeout 7200 bash prove_can_arb.sh 2>&1 | grep -E "DONE" | sed 's/.*\] *//' | cut -c1-40
 echo "--- CAN arbitration harness simulation"; bash sim_can_arb_ind.sh 2>&1 | tail -3
+echo "--- USB proof bugs"; echo "broke $(grep -c BROKE "$OUT/f_usb.txt")"; grep -vE "^BROKE" "$OUT/f_usb.txt" | cut -c1-80
+echo "--- USB proof"; timeout 7200 bash prove_usb.sh 2>&1 | grep -E "DONE" | sed 's/.*\] *//' | cut -c1-40
+echo "--- USB harness simulation"; bash sim_usb.sh 2>&1 | tail -3
 echo "--- UART proof"; timeout 2400 bash prove_uart.sh 2>&1 | grep -E "DONE" | sed 's/.*\] *//' | cut -c1-40
 echo "--- UART harness simulation"; bash sim_uart.sh 2>&1 | tail -3
 L="$HOME/janus-tools/build/ind"

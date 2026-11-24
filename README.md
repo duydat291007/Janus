@@ -31,8 +31,8 @@ peripheral, or a witness that checks the traffic without driving anything.
 
 The chip as of commit f2488cb, with the `keep` flag and the host readback
 frame, passed the full Tiny Tapeout flow: layout, precheck and gate-level
-test. Since then the I2C program, which a host loads at run time, the proofs
-and the documents have changed, and so has one thing in the chip: a hart no
+test. Since then the I2C and USB programs, which a host loads at run time, the
+proofs and the documents have changed, and so has one thing in the chip: a hart no
 longer counts a line as held while it pulls the line away itself, which the
 CAN proof showed was needed. That chip was laid out locally with the same
 flow, at a placement density of 40% instead of 45% so that it routes in
@@ -92,15 +92,37 @@ Everything below was checked in simulation or by formal proof.
   data frame reads the same fields, correct stuffing and CRC, and bits of
   exactly the bit time. Building it exposed a bug in the hart, now fixed: the
   hold trap could fire just after a start of frame went out, and both harts
-  then received a phantom frame. Arbitration between two senders is not yet
-  proven; in simulation it picks the right winner at every skew two starts of
-  frame can have, from a bit time of 12 ticks.
-- A sixth unbounded proof covers timed bits, `sync`, stuffing, CRC, NRZI,
+  then received a phantom frame. Arbitration is proven too, with both queues
+  free and for any bit time from 12 ticks: whichever hart starts first, by up
+  to 4 ticks, the frame with the smaller identifier wins, only the loser
+  loses and drops its frame, and both harts store the winner's fields. At 11
+  ticks the earlier sender can read the later one's start of frame as its
+  first identifier bit.
+- A sixth protocol is proven whole: low-speed USB, a host and a device, for
+  any bit time from 11 ticks. It covers what the others do not use: the
+  complementary pin pair, NRZI, stuffing of ones only, a CRC16 the host
+  computes and sends on RESTART, end-of-packet break bits and the listener's
+  jump on one, a packet type read from its PID into the counter, and the
+  turnaround in which the device answers. A monitor that knows only the
+  textbook rules for a low-speed packet reads SYNC, the bytes the host took,
+  correct stuffing and CRC16, two bit times of SE0, and at least two bit
+  times between packets; the device answers each data packet exactly when
+  its CRC16 checks, stores every byte, and the host stores the ACK. Nothing is
+  assumed about what the host queues or when. Building it exposed three
+  faults in the program, now fixed: the device counted packets to find the
+  data packet, so on one tick a hold-trap timeout split host and device;
+  after the ACK the host's next packet could follow after a little over one
+  bit time, where the USB 2.0 specification asks for two; and the host gave
+  up on a handshake after 17 bit times, not 18. The device now tells a data
+  packet by its PID, still within 48 instructions. The price is that the host
+  no longer lets go of the idle bus: it drives J from its first packet on,
+  except while it waits for a handshake. A USB host should not.
+- Another unbounded proof covers timed bits, `sync`, stuffing, CRC, NRZI,
   the pin pair and break bits for every program in that subset: the two harts
   stay in step, the listener reads what the owner sent, and neither counts a
   violation the other does not. It does not cover the jump on a break, `set`,
   clocked bits, traps, `claim`, `choice`, `match`, arbitration, resync or
-  witnesses, so USB, the one protocol left, is not proven whole.
+  witnesses.
 - For bring-up, the host can read where each hart stands: its program
   counter, role, state and current instruction, captured on one tick. Through
   a stopped hart it can also read the program memory back.

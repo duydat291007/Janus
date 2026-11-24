@@ -71,14 +71,16 @@ def usb_host_fault_anywhere(queue=None):
     _, clean, _, _ = usb(10 ** 9, queue=queue)
     total = clean.owned                      # bits the host sends in one transaction
     first_covered = 36 + 16                  # token packet, then the data SYNC and PID
-    last_covered = total - 5                 # before SE0, SE0, J and the turnaround bit
+    last_covered = total - 6                 # before SE0, SE0, J, the turnaround bit and
+                                             # the J the host holds after the ACK
     silent = []
     for n in range(0, total, STEP):
         bus, host, device, witness = usb(n, queue=queue)
         assert host.fault is None, n         # the fault happened
         acked = tu.ACK_BYTE in host.rx_q
         if acked:                            # an answered packet carried the right data
-            assert list(device.rx_q)[-len(PAYLOAD):] == PAYLOAD, n
+            rx = list(device.rx_q)           # (a fault after the ACK can start a stray packet)
+            assert any(rx[i:i + len(PAYLOAD)] == PAYLOAD for i in range(len(rx))), n
         if first_covered <= n <= last_covered:
             assert witness.violations and not acked, f"bit {n} of the data went unnoticed"
         if not witness.violations:

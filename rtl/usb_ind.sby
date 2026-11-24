@@ -1,0 +1,20 @@
+[tasks]
+d4
+
+[options]
+mode prove
+depth 4
+timeout 7200
+
+[engines]
+smtbmc bitwuzla
+
+[script]
+read -formal janus_hart.v
+read -formal usb_ind.sv
+prep -top usb_ind
+
+[files]
+janus_hart.v
+usb_ind.sv
+usb_rom.vh

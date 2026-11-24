@@ -227,13 +227,21 @@ def can(bit):
 
 
 def usb(bit):
-    """Low-speed USB, one OUT transaction: a token and a data packet from the
+    """Low-speed USB, OUT transactions: a token and a data packet from the
     host, then a handshake from the device. The host queues each packet as
     its bytes after SYNC. A packet ends with STOP, or with RESTART to have
     the chip send the CRC16 it computed first. The chip does the line code,
-    the stuffing, the CRC16 and the end of packet."""
+    the stuffing, the CRC16 and the end of packet.
+
+    A packet is a data packet when its PID's two lowest bits, the first two
+    sent, are both 1 (DATA0, DATA1, DATA2, MDATA): the counter is 1 for it
+    and 0 for any other. The device answers a data packet whose CRC16
+    checks with ACK. That holds whatever the time between packets: no
+    timeout decides what a packet is."""
     p = Prog("usb", {"DP": PUSH_PULL, "DM": PUSH_PULL})
-    p.hold_trap("DM", 1, 17 * bit, "tmo")  # idle bus: no packet is coming
+    # The bus held in J for 18 bit times: a handshake that is due has not
+    # come (the host waits at least 18); with none due, nothing to do.
+    p.hold_trap("DM", 1, 18 * bit, "tmo")
 
     def sync(owner):
         p.step("DM", owner, 0, bit, sync=True)  # SYNC: KJKJKJ, then KK
@@ -242,15 +250,21 @@ def usb(bit):
 
     p.mode(nrzi=True, pair="DP", resync="DM", poly=0x8005, width=16 | INIT1,
            resid=0x800D, xor=crc_send_mask(0x8005, 16, 0xFFFF),  # sent inverted
-           on_error="done", on_break="eop2")
-    p.label("top")
-    p.counter(2)  # two host packets: token, then data
+           on_error="end", on_break="eop2")
+    # The counter is 0 on every way here.
     p.label("packet")
     p.claim(H, "DM")  # a host with nothing queued sends nothing
     p.mode(stuff=6 | ONES)  # a 0 after six 1s, from SYNC to the end of packet
     sync(H)
     p.load(H)
-    p.bits("DM", H, 8, dwell=bit)  # PID
+    # The PID, least significant bit first. After its first two bits, bit 1
+    # is the last bit seen and bit 0 is just below the top of the received
+    # byte: the counter takes bit 0 when bit 1 is 1.
+    p.bits("DM", H, 2, dwell=bit)
+    p.branch("last0", "pid")
+    p.counter(mask=0x40, cap=1)
+    p.label("pid")
+    p.bits("DM", H, 6, dwell=bit)
     p.store(D)
     p.mode(width=16 | INIT1)  # the CRC starts after the PID
     p.label("byte")
@@ -269,24 +283,24 @@ def usb(bit):
     p.mode(stuff=0)  # the coder stops, so the CRC keeps its value
     p.step("DM", H, 0, bit)  # J, as a change from SE0
     p.step("DM", H, 1, bit)  # bus turnaround
-    p.loop("packet")
-    p.branch("crc_bad", "done")  # the data packet: no handshake for a bad CRC16
+    p.branch("count0", "packet")  # not a data packet: wait for the next
+    p.branch("crc_bad", "end")  # a data packet: no handshake for a bad CRC16
 
     p.load(D, imm=0xD2)  # ACK
     sync(D)
     p.bits("DM", D, 8, dwell=bit)
     p.store(H)
     p.bits("DM", D, 2, dwell=bit, brk=True)
-    p.step("DM", D, 0, bit)
-    p.jump("done")
-
+    p.step("DM", D, 0, bit)  # J, as a change from SE0
+    # A second bit of J, from the host: the device, listening, lets go of
+    # both pins, and the host's next packet comes two bit times or more
+    # after the end of packet.
+    p.step("DM", H, 1, bit)
+    p.label("end")
+    p.loop("packet")  # the counter goes from 1 to 0, so this never jumps
     p.label("tmo")
-    p.branch("count0", "lost")  # the counter is 0 only while a handshake is due
-    p.label("done")
-    p.set("DM", ALL, None)
-    p.set("DP", ALL, None)
-    p.jump("top")
+    p.branch("count0", "packet")  # no handshake due: claim again at once
     p.label("lost")  # no handshake came: every hart counts a violation
     p.mode(width=16 | INIT1)  # a restarted CRC is never the residual ...
-    p.branch("crc_bad", "done")  # ... so this always counts and jumps
+    p.branch("crc_bad", "end")  # ... so this always counts and jumps
     return p
