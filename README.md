@@ -83,22 +83,24 @@ Everything below was checked in simulation or by formal proof.
   the timing: SCL low and high, data setup and hold, START setup and hold,
   STOP setup, and bus free time. Building it exposed a timing bug, now fixed: the
   next START could come 4 ticks after a STOP, whatever the clock rate.
-- A fifth protocol is proven whole: CAN, a sender and a receiver, for any bit
-  time from 11 ticks. It covers what the others do not use: a claim that picks
-  the role by whether a frame is queued, bit stuffing sent and checked, a CRC
-  computed as the bits go and checked by the receiver, a loop counted by a
-  received length, resynchronisation, the receiver's ACK inside the sender's
-  frame, and a hold trap back to `idle`. Each hart stores every field the
-  sender took, and a monitor that knows only the textbook rules for a base
-  data frame reads the same fields, correct stuffing and CRC, and bits of
-  exactly the bit time. Building it exposed a bug in the hart, now fixed: the
-  hold trap could fire just after a start of frame went out, and both harts
-  then received a phantom frame. Arbitration is proven too, with both queues
-  free and for any bit time from 12 ticks: whichever hart starts first, by up
-  to 4 ticks, the frame with the smaller identifier wins, only the loser
-  loses and drops its frame, and both harts store the winner's fields. At 11
-  ticks the earlier sender can read the later one's start of frame as its
-  first identifier bit.
+- A fifth protocol is proven whole, in all three roles at once: CAN, a sender,
+  a receiver or none, and a witness, for any bit time from 11 ticks. It covers
+  what the others do not use: a claim that picks the role by whether a frame is
+  queued, bit stuffing sent and checked, a CRC computed as the bits go and
+  checked by the receiver, a loop counted by a received length,
+  resynchronisation, the receiver's ACK inside the sender's frame, and a hold
+  trap back to `idle`. Each hart stores every field the sender took, the
+  witness drives nothing and logs the same fields on the same ticks, and a
+  monitor that knows only the textbook rules for a base data frame reads the
+  same fields, correct stuffing and CRC, and bits of exactly the bit time.
+  Every hart counts each frame nobody acknowledged, and nothing else. Building
+  it exposed a bug in the hart, now fixed: the hold trap could fire just after
+  a start of frame went out, and both harts then received a phantom frame.
+  Arbitration is proven too, with both queues free and for any bit time from 12
+  ticks: whichever hart starts first, by up to 4 ticks, the frame with the
+  smaller identifier wins, only the loser loses and drops its frame, both harts
+  store the winner's fields, and the witness logs them. At 11 ticks the earlier
+  sender can read the later one's start of frame as its first identifier bit.
 - A sixth protocol is proven whole, in all three roles at once: low-speed USB,
   a host, a device or none, and a witness, for any bit time from 11 ticks. It
   covers what the others do not use: the complementary pin pair, NRZI, stuffing

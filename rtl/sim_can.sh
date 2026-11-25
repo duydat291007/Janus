@@ -40,5 +40,10 @@ done
 for bit in 11 16 49; do
     for k in 1 2 3 4 5 6 7 8; do one $bit +race=$k +frames=6 +ticks=400000; done
 done
+# No receiver: every hart counts each frame nobody acknowledges.
+for bit in 11 12 13 16 17 25 41 100 217 2047; do one $bit +norx +frames=25 +ticks=3000000; done
+for bit in 11 16 41; do
+    for k in 1 3 5 8; do one $bit +norx +race=$k +frames=6 +ticks=400000; done
+done
 echo "can sim: $runs runs, $bad failed, $frames frames ($short with fewer bytes than their length), $fields fields received, $ticks ticks"
 [ "$bad" -eq 0 ] && [ "$frames" -gt 0 ] || exit 1

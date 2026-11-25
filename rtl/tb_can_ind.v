@@ -25,7 +25,12 @@ module tb_can_ind;
     reg [10:0] BIT;
     reg [5:0]  start;
     reg [31:0] unwritten;
-    reg [7:0]  addr_a, addr_b;
+    reg [7:0]  addr_a, addr_b, addr_c = 0;
+    reg        valid_c = 0;          // what the witness finds queued
+    reg [7:0]  data_c = 0;
+    reg [1:0]  ctl_c = 0;
+    integer    logged = 0;
+    reg        norx;                 // no receiver: hart b is a second witness
     reg [2:0]  other;
     reg [10:0] ident;
     reg        whole = 1;            // the last frame queued had all its data bytes
@@ -40,7 +45,8 @@ module tb_can_ind;
 
     can_ind dut (.clk(clk), .BIT(BIT), .start(start), .unwritten(unwritten),
         .addr_a(addr_a), .addr_b(addr_b), .other(other),
-        .valid_a(valid_a), .data_a(data_a), .ctl_a(ctl_a));
+        .valid_a(valid_a), .data_a(data_a), .ctl_a(ctl_a),
+        .addr_c(addr_c), .valid_c(valid_c), .data_c(data_c), .ctl_c(ctl_c), .norx(norx));
 
     initial begin
         if (!$value$plusargs("seed=%d", seed)) seed = 1;
@@ -49,6 +55,7 @@ module tb_can_ind;
         if (!$value$plusargs("ticks=%d", max_ticks)) max_ticks = 2000000;
         if (!$value$plusargs("trace=%d", trace)) trace = 0;
         if (!$value$plusargs("race=%d", race)) race = -1;
+        norx = $test$plusargs("norx");
         BIT = bit_t;
         start = {$random(seed)} % 30;
         unwritten = $random(seed);
@@ -132,13 +139,21 @@ module tb_can_ind;
             if (kind[next_a % 4096] == 2) frames = frames + 1;
             next_a = next_a + 1;
         end
-        if (dut.push_b) begin
+        if (dut.tk_b) begin
             if (next_b >= ntook) fail("hart b stored a field never sent");
             else if ((dut.pdata_b & fmask(next_b)) !== want(next_b)) fail("hart b stored a wrong field");
             next_b = next_b + 1;
             bytes = bytes + 1;
         end
 
+        // The witness's log, checked against what the receiver stores.
+        if (dut.seen_c) begin
+            logged = logged + 1;
+            if (!dut.tk_b || dut.pdata_c !== dut.pdata_b) fail("the witness logged a wrong field");
+        end
+        valid_c = $random(seed);
+        data_c = $random(seed);
+        ctl_c = $random(seed);
         // A new frame when the queue has run dry, after a pause. After a
         // frame short of data bytes the sender reads FF from the empty queue
         // until the frame ends, so a host waits for it to go back to `idle`.
@@ -163,6 +178,9 @@ module tb_can_ind;
         end
         other = $random(seed);
         if (frames >= want_frames || ticks >= max_ticks) begin
+            // A frame with no receiver is counted once by every hart, with one none.
+            if (norx ? (dut.viol_a < (sent > 254 ? 254 : sent - 1) || dut.viol_a > sent) : dut.viol_a != 0) fail("violations");
+            if (logged != bytes) fail("the witness's log is not what was stored");
             if (errors == 0 && frames != 0 && next_b >= next_a - 3)
                 $display("OK bit %0d start %0d frames %0d short %0d fields %0d ticks %0d",
                          bit_t, start, frames, short, bytes, ticks);

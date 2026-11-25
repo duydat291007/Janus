@@ -24,7 +24,7 @@ mutant() {
 # failed assumption does not count. Bugs the simulation does not catch go to
 # the solver; those that only weaken an assumption always do, since the
 # simulation never breaks one.
-SIMS="11:1: 12:2: 16:3: 50:4: 217:5: 2047:6: 11:7:+race=5 16:8:+race=5"
+SIMS="11:1: 12:2: 16:3: 50:4: 217:5: 2047:6: 11:7:+race=5 16:8:+race=5 11:9:+norx 16:10:+norx 50:11:+norx"
 one() {
     D="$OUT/m$1"; name="$2"; target="$3"; expr="$4"
     mkdir -p "$D"; cp "$OUT/rom.vh" "$D/can_rom.vh"; cp janus_hart.v can_ind.sv can_ind.sby "$D/"
@@ -46,7 +46,7 @@ one() {
                | grep -oE "^ERROR: [^ ]*can_ind.sv:[0-9]+" | sed 's/.*sv://' | grep -vxE "$assumes" | head -1)
         if [ -n "$line" ]; then echo "BROKE PROOF (simulation, bit $bit${extra:+ $extra}, line $line) $name"; rm -rf "$D"; return; fi
     done
-    (cd "$D" && timeout -k 30 5400 sby -f can_ind.sby h8 > sby.txt 2>&1); code=$?
+    (cd "$D" && timeout -k 30 10800 sby -f can_ind.sby h8 > sby.txt 2>&1); code=$?
     for p in $(pgrep yices-smt2); do
         case "$(readlink /proc/$p/cwd)" in "$D"*) kill "$p" ;; esac
     done
@@ -93,6 +93,14 @@ mutant "the hold count runs on while the hart pulls the line" hart 's/\&\& !(oe_
 # passes. The claims are about what is sent and stored, not error handling.
 mutant "receiver ignores a bad CRC (expected to survive: every frame here is good)" hart 's/taken = crc != c_resid;/taken = 1\x27b0;/'
 
+mutant "a listener checks no constant bit, so a missing ACK goes uncounted" hart 's/end else if (src_const \&\& seen != src_eff\[0\] \&\& (inserted || !i_strm))/end else if (1\x27b0)/'
+mutant "a witness logs nothing" hart 's/else if (role == WITNESS) seen_push_r = 1.b1;/else if (1\x27b0) seen_push_r = 1\x27b1;/'
+mutant "a witness stores as a receiver does" hart 's/if (is_mine(i_party, role)) rx_push_r = 1.b1;/if (is_mine(i_party, role) || role == WITNESS) rx_push_r = 1\x27b1;/'
+mutant "a witness acknowledges" hart 's/(r != WITNESS) : (r == party);/(r != WITNESS) : (r == party || (r == WITNESS \&\& party == 2\x27d1));/'
+mutant "a witness counts no violations" hart 's/if (violations_r != 8.hFF) violations_r/if (violations_r != 8\x27hFF \&\& role != WITNESS) violations_r/'
+mutant "a hart with a queue claims whatever its role" hart 's/if ((base_role == i_owner \&\& tx_valid) || !pin\[i_pin\])/if (tx_valid || !pin[i_pin])/'
+mutant "a witness codes every bit as 0" hart 's/(cur_mine \&\& is_mine(i_owner, role)) ? val : seen;/(cur_mine \&\& is_mine(i_owner, role)) ? val : (seen \&\& role != WITNESS);/'
+
 # A bug both harts share. They still agree with each other, so only the
 # textbook rule can tell.
 mutant "both harts send the least significant bit first" hart 's/if (c_msb) begin val = tx\[7\]; tx = {tx\[6:0\], 1.b0}; end/if (!c_msb) begin val = tx[7]; tx = {tx[6:0], 1\x27b0}; end/; s/else      rx0 = c_msb ? {rx0\[6:0\], b} : {b, rx0\[7:1\]};/else      rx0 = !c_msb ? {rx0[6:0], b} : {b, rx0[7:1]};/'
@@ -100,7 +108,9 @@ mutant "both harts send the least significant bit first" hart 's/if (c_msb) begi
 # The monitor: a wrong idea of CAN must not fit the wire.
 mutant "monitor wants a stuff bit after four" proof 's/wire       m_stuff = m_st == M_STUFFED \&\& m_run == 3.d5;/wire       m_stuff = m_st == M_STUFFED \&\& m_run == 3\x27d4;/'
 mutant "monitor's CRC polynomial wrong" proof 's/? 15.h4599 : 15.h0);/? 15\x27h4598 : 15\x27h0);/'
-mutant "monitor wants a recessive ACK slot" proof 's/assert (m_bus == (m_tail != 4.d1));/assert (m_bus);/'
+mutant "monitor wants a recessive ACK slot" proof 's/assert (m_bus == (m_tail != 4.d1 || norx));/assert (m_bus);/'
+mutant "monitor counts no missing ACK" proof 's/m_tail == 4.d1 \&\& m_bus \&\& m_nack != 8.hFF/1\x27b0 \&\& m_bus \&\& m_nack != 8\x27hFF/'
+mutant "no receiver, though one is assumed there" proof 's/base_role(norx ? 2.d3 : 2.d0)/base_role(2\x27d3)/'
 mutant "monitor's intermission one bit short" proof 's/if (m_tail == 4.d12) m_st <= M_IDLE;/if (m_tail == 4\x27d11) m_st <= M_IDLE;/'
 mutant "monitor wants bits a tick longer" proof 's/wire       m_end = m_st != M_IDLE \&\& m_t == BIT - 1.b1;/wire       m_end = m_st != M_IDLE \&\& m_t == BIT;/'
 

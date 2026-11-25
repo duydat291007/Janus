@@ -1,8 +1,9 @@
 // Unbounded proof by k-induction of a fifth complete protocol: the CAN program
-// from protocols.py, word for word as the assembler emits it, on two real
-// harts. Both start as possible senders (role S). Hart a has a queue of
+// from protocols.py, word for word as the assembler emits it, on three real
+// harts. Two start as possible senders (role S). Hart a has a queue of
 // frames to send; hart b's queue stays empty, so it always ends up the
-// receiver (role R).
+// receiver (role R). Hart c is a witness, which drives nothing and logs. Or
+// no receiver is there, and hart b is a second witness.
 //
 // It covers what the other proofs never reach: a claim that decides the role
 // by whether the hart has something to send, bit stuffing, a CRC computed as
@@ -17,10 +18,12 @@
 //   valid, data, ctl  hart a's queue: any entries, arriving, changing or
 //                     leaving at any time (hart a reads it only to claim and
 //                     on the tick it takes a byte)
+//   norx        whether a receiver is there
+//   valid_c, data_c, ctl_c  what the witness finds in its queue, on every tick
 //   unwritten   what the other 29 program words hold
 //
 // Assumed:
-//   - both harts leave reset on the same tick, with the program's hold trap
+//   - the harts leave reset on the same tick, with the program's hold trap
 //     set, no prescaler and no adversary fault;
 //   - hart b's queue is empty;
 //   - the host queues base data frames: when hart a takes its control field,
@@ -33,7 +36,8 @@
 `ifdef CAN_SIM
 module can_ind (input clk, input [10:0] BIT, input [5:0] start, input [31:0] unwritten,
                 input [7:0] addr_a, addr_b, input [2:0] other,
-                input valid_a, input [7:0] data_a, input [1:0] ctl_a);
+                input valid_a, input [7:0] data_a, input [1:0] ctl_a,
+                input [7:0] addr_c, input valid_c, input [7:0] data_c, input [1:0] ctl_c, input norx);
     parameter MINBIT = 11;
 
     `include "can_rom.vh"
@@ -51,6 +55,11 @@ module can_ind (input clk);
     (* anyseq *)   wire        valid_a;
     (* anyseq *)   wire [7:0]  data_a;
     (* anyseq *)   wire [1:0]  ctl_a;
+    (* anyconst *) wire [7:0]  addr_c;
+    (* anyconst *) wire        norx;
+    (* anyseq *)   wire        valid_c;
+    (* anyseq *)   wire [7:0]  data_c;
+    (* anyseq *)   wire [1:0]  ctl_c;
 `endif
 
     // Reset: one tick of power-on reset, then two in which the host writes
@@ -79,14 +88,27 @@ module can_ind (input clk);
     wire        lost_a, lost_b;
     wire [4:0]  width_a, width_b;
     wire [11:0] lf_a, lf_b;
+    wire [7:0]  oe_c, ov_c, count_c, rx_c, pin_c, s1_c, armed_c, tx_c, viol_c, vout_c, pdata_c;
+    wire [87:0] code_c;
+    wire [111:0] cfg_c;
+    wire [47:0] cset_c;
+    wire [31:0] held_c;
+    wire [5:0]  pc_c;
+    wire [3:0]  s_c, k_c, keep_c, prev_c;
+    wire [4:0]  partial_c, width_c;
+    wire [11:0] now_c, edge_c, lf_c;
+    wire [1:0]  role_c, src_c;
+    wire        last_c, mine_c, val_c, insd_c, sbit_c, pop_c, clear_c, push_c, seen_c, seen2_c, lost_c;
 
     // BUS is open drain with a pull-up: low exactly when a hart drives it low.
+    // (The witness never drives, a claim below.)
     wire        low = (oe_a[0] && !ov_a[0]) || (oe_b[0] && !ov_b[0]);
     wire [7:0]  bus = {4'hF, other, !low};
 
-    wire [5:0]  at_a = pc_a - start, at_b = pc_b - start;
+    wire [5:0]  at_a = pc_a - start, at_b = pc_b - start, at_c = pc_c - start;
     wire [31:0] ins_a = can_word(at_a, BIT, start, unwritten);
     wire [31:0] ins_b = can_word(at_b, BIT, start, unwritten);
+    wire [31:0] ins_c = can_word(at_c, BIT, start, unwritten);
 
     janus_hart a (.clk(clk), .por(por), .rst(rst), .wire_in(bus), .oe(oe_a), .ov(ov_a),
         .od_mask(8'h01), .base_role(2'd0), .reset_pc(start), .addr_reg(addr_a), .pc(pc_a),
@@ -104,7 +126,7 @@ module can_ind (input clk);
         .dbg_clean());
 
     janus_hart b (.clk(clk), .por(por), .rst(rst), .wire_in(bus), .oe(oe_b), .ov(ov_b),
-        .od_mask(8'h01), .base_role(2'd0), .reset_pc(start), .addr_reg(addr_b), .pc(pc_b),
+        .od_mask(8'h01), .base_role(norx ? 2'd3 : 2'd0), .reset_pc(start), .addr_reg(addr_b), .pc(pc_b),
         .pc_sel(), .ins(ins_b), .tx_valid(1'b0), .tx_ctl(2'd0), .tx_data(8'd0),
         .tx_pop(pop_b), .tx_clear(clear_b), .rx_push(push_b), .seen_push(seen_b),
         .seen_push2(seen2_b), .push_data(pdata_b), .push_data2(), .violations(vout_b),
@@ -117,6 +139,24 @@ module can_ind (input clk);
         .dbg_viol(viol_b), .dbg_tx(tx_b), .dbg_cfg(cfg_b), .dbg_cset(cset_b),
         .dbg_cnt(), .dbg_rx1(), .dbg_prev(prev_b), .dbg_held(held_b), .dbg_keep(keep_b), .dbg_last_fall(lf_b),
         .dbg_clean());
+
+    janus_hart c (.clk(clk), .por(por), .rst(rst), .wire_in(bus), .oe(oe_c), .ov(ov_c),
+        .od_mask(8'h01), .base_role(2'd3), .reset_pc(start), .addr_reg(addr_c), .pc(pc_c),
+        .pc_sel(), .ins(ins_c), .tx_valid(valid_c), .tx_ctl(ctl_c), .tx_data(data_c),
+        .tx_pop(pop_c), .tx_clear(clear_c), .rx_push(push_c), .seen_push(seen_c),
+        .seen_push2(seen2_c), .push_data(pdata_c), .push_data2(), .violations(vout_c),
+        .arb_lost(lost_c), .cfg_we(cfg_we), .cfg_addr(cfg_addr), .cfg_data(cfg_data),
+        .dbg_s(s_c), .dbg_count(count_c), .dbg_rx(rx_c), .dbg_last(last_c),
+        .dbg_now(now_c), .dbg_edge(edge_c), .dbg_dwell(), .dbg_k(k_c),
+        .dbg_partial(partial_c), .dbg_role(role_c), .dbg_src(src_c), .dbg_mine(mine_c),
+        .dbg_val(val_c), .dbg_pin(pin_c), .dbg_s1(s1_c), .dbg_armed(armed_c),
+        .dbg_code(code_c), .dbg_inserted(insd_c), .dbg_stuff_bit(sbit_c), .dbg_width(width_c),
+        .dbg_viol(viol_c), .dbg_tx(tx_c), .dbg_cfg(cfg_c), .dbg_cset(cset_c),
+        .dbg_cnt(), .dbg_rx1(), .dbg_prev(prev_c), .dbg_held(held_c), .dbg_keep(keep_c), .dbg_last_fall(lf_c),
+        .dbg_clean());
+
+    wire       tk_b = norx ? seen_b : push_b;        // hart b takes a field, storing or logging it
+    wire [1:0] rl_b = norx ? 2'd3 : 2'd1;             // its role in a frame
 
     localparam S_BOOT = 4'd0, S_EXEC = 4'd1, S_CLAIM = 4'd2, S_SYNC = 4'd3, S_EDGE = 4'd4,
                S_MID = 4'd5, S_SETTLE = 4'd6, S_POST = 4'd7;
@@ -151,8 +191,8 @@ module can_ind (input clk);
 
     // What each hart's next store must hold: the field's bits, which sit at
     // the bottom of the byte, and which bits those are.
-    reg [7:0]  xv_a = 0, xm_a = 0, xv_b = 0, xm_b = 0;
-    reg        st_a = 0, st_b = 0;
+    reg [7:0]  xv_a = 0, xm_a = 0, xv_b = 0, xm_b = 0, xv_c = 0, xm_c = 0;
+    reg        st_a = 0, st_b = 0, st_c = 0;
     function automatic [15:0] field_of(input [5:0] at, input [7:0] g1, g2, g3, gd);
         case (at)
             PC_STORE1: field_of = {{5'd0, g1[7:5]}, 8'h07};
@@ -165,7 +205,11 @@ module can_ind (input clk);
                                                     || at_a == PC_STORE3 || at_a == PC_DSTORE);
     wire       b_store = !rst && s_b == S_EXEC && (at_b == PC_STORE1 || at_b == PC_STORE2
                                                     || at_b == PC_STORE3 || at_b == PC_DSTORE);
+    wire       c_store = !rst && s_c == S_EXEC && (at_c == PC_STORE1 || at_c == PC_STORE2
+                                                    || at_c == PC_STORE3 || at_c == PC_DSTORE);
     always @(posedge clk) begin
+        st_c <= c_store;
+        if (c_store) {xv_c, xm_c} <= field_of(at_c, f1, f2, f3, fd);
         st_a <= a_store;
         st_b <= b_store;
         if (a_store) {xv_a, xm_a} <= field_of(at_a, f1, f2, f3, fd);
@@ -196,6 +240,8 @@ module can_ind (input clk);
     reg [7:0]  m_sh = 0;         // the last eight frame bits read, start of frame not counted
     reg [3:0]  m_dlc = 0;        // the length field, once read
     reg [3:0]  m_tail = 0;       // bits of the tail before this one
+    reg [7:0]  m_nack = 0;       // frames whose ACK slot was recessive, saturating
+    reg [2:0]  g_dom = 0;        // dominant bits in the last run of them
     wire       m_bus = bus[0];
     wire       m_sample = m_st != M_IDLE && m_t == h[10:0];      // read this bit now
     wire       m_read = m_st != M_IDLE && m_t >= h[10:0];        // this bit has been read
@@ -238,8 +284,10 @@ module can_ind (input clk);
             end
         end else begin
             m_t <= m_end ? 11'd0 : m_t + 1'b1;
+            if (m_sample && m_st == M_TAIL && m_tail == 4'd1 && m_bus && m_nack != 8'hFF) m_nack <= m_nack + 1'b1;
             if (m_end) begin
                 if (m_st == M_STUFFED) begin
+                    if (!m_b) g_dom <= m_run_next;
                     m_run <= m_run_next;
                     m_last <= m_b;
                     if (!m_stuff) begin
@@ -268,6 +316,8 @@ module can_ind (input clk);
     wire        a_mid = s_a == S_MID;
     wire        b_exec = s_b == S_EXEC, b_claim = s_b == S_CLAIM, b_edge = s_b == S_EDGE;
     wire        b_mid = s_b == S_MID, b_sync = s_b == S_SYNC;
+    wire        c_exec = s_c == S_EXEC, c_claim = s_c == S_CLAIM, c_edge = s_c == S_EDGE;
+    wire        c_mid = s_c == S_MID, c_sync = s_c == S_SYNC;
     // Whether a hart of role r owns a bit of party p, as the hart decides it.
     function automatic mine_of(input [1:0] p, input [1:0] r);
         mine_of = p == 2'd2 ? r != 2'd3 : r == p;
@@ -276,6 +326,7 @@ module can_ind (input clk);
     wire [11:0] tq = {1'b0, m_t};
     wire [11:0] since_a = now_a - edge_a, ahead_a = edge_a - now_a;
     wire [11:0] since_b = now_b - edge_b, ahead_b = edge_b - now_b;
+    wire [11:0] since_c = now_c - edge_c, ahead_c = edge_c - now_c;
     wire        low_a = oe_a[0] && !ov_a[0], low_b = oe_b[0] && !ov_b[0];
 
     // The frame as hart a has it: the monitor's, with this bit taken in once
@@ -422,13 +473,16 @@ module can_ind (input clk);
     // until the ACK slot.
     wire        b_hist = (at_b == PC_SOF && b_mid) || (at_b > PC_SOF && at_b < PC_ACK)
                          || (at_b == PC_ACK && b_exec);
+    // So is the witness, hart c.
+    wire        c_hist = (at_c == PC_SOF && c_mid) || (at_c > PC_SOF && at_c < PC_ACK)
+                         || (at_c == PC_ACK && c_exec);
 
     // ---- The tail, idle, the hold counter and the last fall ----
 
     // BUS in the tail, at tick t of cell c: the ACK slot is dominant, and the
     // receiver's ACK starts and ends two ticks into its cells.
     function automatic tb_at(input [3:0] c, input [11:0] t);
-        tb_at = c == 4'd1 ? t < 12'd2 : c == 4'd2 ? t >= 12'd2 : 1'b1;
+        tb_at = norx ? 1'b1 : c == 4'd1 ? t < 12'd2 : c == 4'd2 ? t >= 12'd2 : 1'b1;
     endfunction
     // BUS two and three ticks ago in the tail. A bit is at least 11 ticks, so
     // a tick in the cell before is past its own change.
@@ -438,7 +492,7 @@ module can_ind (input clk);
                           : m_tail == 0 ? m_last : tb_at(m_tail - 4'd1, 12'd8);
 
     wire        tail = m_st == M_TAIL, idle = m_st == M_IDLE;
-    wire        sh4 = BIT >= 11'd16;                // the ACK pulls hart a 4 ticks later
+    wire        sh4 = BIT >= 11'd16 && !norx;       // the ACK pulls hart a 4 ticks later
     wire [11:0] sh = sh4 ? 12'd4 : 12'd0;
     wire [11:0] cs = now_a - tq;                     // when this bit started
     // Hart a in the tail: up to the ACK slot it keeps the monitor's time;
@@ -451,6 +505,14 @@ module can_ind (input clk);
     wire [3:0]  b_cell = b_late ? m_tail - 4'd1 : m_tail;
     wire [11:0] b_t = b_late ? tq + d - 12'd2 : tq - 12'd2;
     wire [3:0]  b_k = b_cell - 4'd2;
+    // Hart c in the tail: it takes the ACK's fall, two ticks into its slot
+    // as the receiver sends it and two more as hart c sees it, as the slot's
+    // edge, and is 4 ticks later from then on. With no ACK it stays 2.
+    wire [11:0] co = norx ? 12'd2 : 12'd4;
+    wire        c_late = tail && m_tail >= 4'd2 && tq < co;
+    wire [3:0]  c_cell = c_late ? m_tail - 4'd1 : m_tail;
+    wire [11:0] c_t = c_late ? tq + d - co : tq - co;
+    wire [3:0]  c_k = c_cell - 4'd2;
 
     // Ticks since the monitor went idle, and whether a frame has gone by.
     reg [15:0]  m_it = 0;
@@ -492,14 +554,17 @@ module can_ind (input clk);
             end
         end
     end
+    // Recessive ticks in a row before this bit, from the bits before it.
+    wire [15:0] rec_before = m_last ? {13'd0, m_run} * {4'd0, d} : 16'd0;
     // The recessive run in idle after a frame, unsaturated.
-    wire [17:0] it_run = {2'd0, m_it} + 18'd11 * {6'd0, d} - 18'd1;
+    wire [17:0] it_run = norx ? {2'd0, m_it} + 18'd13 * {6'd0, d} + {2'd0, rec_before} + 18'd1
+                         : {2'd0, m_it} + 18'd11 * {6'd0, d} - 18'd1;
+    // Bits from the last fall of BUS to this bit.
+    wire [3:0]  lfb = m_last ? {1'b0, m_run} + {1'b0, g_dom} : {1'b0, m_run};
     // How long ago the harts saw the last fall they still count.
     wire [15:0] lf_age = {4'd0, now_a - lf_a};
     // The fall the harts have seen last: BUS's last fall, once two ticks old.
     wire [11:0] seen_fall = (now_a - g_fall >= 12'd2) ? g_fall + 12'd2 : g_fall0 + 12'd2;
-    // Recessive ticks in a row before this bit, from the bits before it.
-    wire [15:0] rec_before = m_last ? {13'd0, m_run} * {4'd0, d} : 16'd0;
 
 `ifdef CAN_SIM
     always @(negedge clk) begin                  // once a tick, with everything settled
@@ -514,11 +579,28 @@ module can_ind (input clk);
         assert (step <= 2'd3);
         if (!rst) begin
             // CLEAN
-            assert (viol_a == 0 && viol_b == 0 && vout_a == 0 && vout_b == 0);
+            // Every hart counts each frame nobody acknowledged, as it reads the
+            // ACK slot, and nothing else; with a receiver there are none.
+            if (!norx) assert (m_nack == 0);
+            if (tail && m_tail == 4'd1 && norx && tq == h) begin
+                assert ((viol_a == m_nack + 8'd1 || (viol_a == 8'hFF && m_nack == 8'hFF)) && viol_b == m_nack && viol_c == m_nack);
+            end else if (tail && m_tail == 4'd1 && norx && tq == h + 12'd1) begin
+                assert (viol_a == m_nack && viol_b == viol_c && (viol_b + 8'd1 == m_nack || (viol_b == 8'hFF && m_nack == 8'hFF)));
+            end else assert (viol_a == m_nack && viol_b == m_nack && viol_c == m_nack);
+            assert (vout_a == viol_a || vout_a + 8'd1 == viol_a);
+            assert (vout_b == viol_b || vout_b + 8'd1 == viol_b);
+            assert (vout_c == viol_c || vout_c + 8'd1 == viol_c);
             assert (!lost_a && !lost_b && !clear_a && !clear_b);
-            assert (!seen_a && !seen_b && !seen2_a && !seen2_b && !pop_b);
+            assert (!seen_a && (norx ? !push_b && oe_b == 0 : !seen_b) && !seen2_a && !seen2_b && !pop_b);
             assert (keep_a == 0 && keep_b == 0);
             assert (oe_a[7:1] == 0 && oe_b[7:1] == 0);
+
+            // WITNESS: it drives nothing, takes nothing from its queue, and logs
+            // each field as hart a sent it, on the tick the receiver stores it.
+            assert (oe_c == 0 && role_c == 2'd3);
+            assert (!lost_c && !clear_c && !pop_c && !push_c && !seen2_c && keep_c == 0);
+            assert (seen_c == st_c && seen_c == tk_b);
+            if (seen_c) assert ((pdata_c & xm_c) == (xv_c & xm_c));
 
             // WIRE: what the monitor is about to read.
             if (m_sample && m_stuff) assert (m_bus != m_last);           // no stuff error
@@ -533,7 +615,7 @@ module can_ind (input clk);
                 if (m_i == m_crc_at + 8'd14) assert (m_fb == m_crc);       // the CRC
             end
             if (m_sample && m_st == M_TAIL)
-                assert (m_bus == (m_tail != 4'd1));                        // ACK slot dominant
+                assert (m_bus == (m_tail != 4'd1 || norx));                // ACK slot dominant
             // Every bit lasts exactly BIT ticks: BUS changes only where a bit
             // starts, except for the receiver's ACK, which starts and ends two
             // ticks late, as the receiver sees the bus two ticks late.
@@ -569,7 +651,7 @@ module can_ind (input clk);
             if (tail) begin
                 assert (m_tail <= 4'd12);
                 if (m_t > h[10:0]) assert (m_cur == m_bus);
-                if (m_t == 0) assert (m_prev == (m_tail == 0 ? m_last : m_tail != 4'd2));
+                if (m_t == 0) assert (m_prev == (m_tail == 0 ? m_last : norx || m_tail != 4'd2));
                 assert (m_bus == tb_at(m_tail, tq) && m_p2 == t_hist2 && m_p3 == t_hist3);
             end
 
@@ -581,6 +663,8 @@ module can_ind (input clk);
             if (s_a == S_BOOT || s_b == S_BOOT)
                 assert (s_a == s_b && at_a == 0 && at_b == 0 && now_a == 0 && held_a == 0
                         && !cset_a[13] && idle && !m_fr && m_it == 0 && !g_fell);
+            assert (prev_c == prev_a && pin_c == pin_a && s1_c == s1_a && now_c == now_a);
+            if (s_c == S_BOOT || s_a == S_BOOT) assert (s_c == s_a && at_c == 0 && held_c == 0 && !cset_c[13]);
 
             // ---- Hart a's shift register: the field's byte, shifted once as
             // each of its bits starts ----
@@ -594,6 +678,9 @@ module can_ind (input clk);
             // trap checks, exactly while it is on a later bit.
             assert (partial_a[0] == ((a_edge || a_mid) && k_a != 0)
                     && partial_b[0] == ((b_sync || b_edge || b_mid) && k_b != 0));
+            assert (partial_c[0] == ((c_sync || c_edge || c_mid) && k_c != 0));
+            if (c_sync || c_edge || c_mid) assert (!mine_c && k_c <= ins_c[20:17]
+                                         && src_c == (code_c[1] ? {1'b1, code_c[0]} : ins_c[22:21]));
             // Its index never passes the instruction's last bit.
             if (a_edge || a_mid) assert (mine_a == mine_of(ins_a[24:23], role_a) && k_a <= ins_a[20:17]
                                          && src_a == (code_a[1] ? {1'b1, code_a[0]} : ins_a[22:21]));
@@ -608,11 +695,13 @@ module can_ind (input clk);
                 assert (mine_a && val_a && src_a == ins_a[22:21]);
             if (a_edge && at_a == PC_SOF) assert (mine_a && !val_a && src_a == ins_a[22:21]);
             if (a_edge && at_a == PC_ACK) assert (!mine_a);
-            if (b_edge && at_b == PC_ACK && !b_hist) assert (mine_b && !val_b && src_b == ins_b[22:21]);
+            if (b_edge && at_b == PC_ACK && !b_hist) assert (mine_b == !norx && (norx || !val_b) && src_b == ins_b[22:21]);
             if (b_edge && at_b == PC_TAIL) assert (!mine_b);
             // From hart b's read of the ACK delimiter on, it has last seen BUS
             // recessive, so it sees the next start of frame as a change.
             if (tail && !b_hist && (b_cell > 4'd2 || (b_cell == 4'd2 && b_t >= h))) assert (armed_b[0]);
+
+            if (tail && !c_hist && (c_cell > 4'd2 || (c_cell == 4'd2 && c_t >= h))) assert (armed_c[0]);
 
             // ---- Hart a in the stuffed part of a frame ----
             if (stuffed) begin
@@ -657,17 +746,23 @@ module can_ind (input clk);
             if (b_hist) begin
                 assert (at_b == h2_at && s_b == h2_s && k_b == h2_k && code_b[23:0] == h2_code);
                 assert (rx_b == h2_rx && count_b == h2_cnt && edge_b == h2_edge + 12'd2);
-                assert (partial_b[0] == h2_p && role_b == 2'd1);
+                assert (partial_b[0] == h2_p && role_b == rl_b);
                 if (b_edge || b_mid) assert (!mine_b && src_b == h2_src);
+            end
+            if (c_hist) begin
+                assert (at_c == h2_at && s_c == h2_s && k_c == h2_k && code_c[23:0] == h2_code);
+                assert (rx_c == h2_rx && count_c == h2_cnt && edge_c == h2_edge + 12'd2);
+                assert (partial_c[0] == h2_p);
+                if (c_edge || c_mid) assert (src_c == h2_src);
             end
 
             // ---- Configuration, as each hart's mode words have set it ----
             assert (cfg_a == {16'd0, 16'd0, can_hold_ticks(BIT), 16'd0, can_hold(start), 32'd0});
-            assert (cfg_b == cfg_a);
+            assert (cfg_b == cfg_a && cfg_c == cfg_a);
             assert (code_a[87:50] == {1'b0, 2'd0, 1'b0, 16'd0, 16'd0, 1'b0, 1'b0}
-                    && code_b[87:50] == code_a[87:50]);
+                    && code_b[87:50] == code_a[87:50] && code_c[87:50] == code_a[87:50]);
             // The CRC register's top bit: above the 15-bit width, so never set.
-            assert (code_a[23] == 1'b0 && code_b[23] == 1'b0);
+            assert (code_a[23] == 1'b0 && code_b[23] == 1'b0 && code_c[23] == 1'b0);
             // The hold trap can send hart a back to `idle` after `stuff` and
             // before its start of frame goes out; it then keeps that frame's
             // stuffing and arbitration settings until it claims again.
@@ -676,6 +771,13 @@ module can_ind (input clk);
             assert (code_b[49:46] == ((at_b > PC_STUFF && at_b <= PC_UNSTUFF) ? 4'd5 : 4'd0));
             assert (code_a[45:24] == {at_a > PC_POLY ? 16'h4599 : 16'h0, at_a > PC_WIDTH ? 5'd15 : 5'd0,
                                       at_a > PC_MSB});
+            assert (code_c[49:46] == ((at_c > PC_STUFF && at_c <= PC_UNSTUFF) ? 4'd5 : 4'd0));
+            assert (code_c[45:24] == {at_c > PC_POLY ? 16'h4599 : 16'h0, at_c > PC_WIDTH ? 5'd15 : 5'd0,
+                                      at_c > PC_MSB});
+            assert (cset_c[47:45] == {at_c > PC_RESYNC, 2'd0});
+            if (at_c > PC_LOSE && at_c <= PC_NOLOSE) begin assert (cset_c[44:43] == 2'd1); end
+            else assert (cset_c[44:43] == 2'd2 || cset_c[44:43] == 2'd3);
+            assert (cset_c[42:37] == (at_c > PC_ONERR ? PC_BAD + start : 6'd0) && cset_c[36:14] == 0 && cset_c[12:0] == 0);
             assert (code_b[45:24] == {at_b > PC_POLY ? 16'h4599 : 16'h0, at_b > PC_WIDTH ? 5'd15 : 5'd0,
                                       at_b > PC_MSB});
             assert (cset_a[47:45] == {at_a > PC_RESYNC, 2'd0} && cset_b[47:45] == {at_b > PC_RESYNC, 2'd0});
@@ -687,10 +789,13 @@ module can_ind (input clk);
             assert (cset_a[42:37] == (at_a > PC_ONERR ? PC_BAD + start : 6'd0));
             assert (cset_b[42:37] == (at_b > PC_ONERR ? PC_BAD + start : 6'd0));
             assert (cset_a[36:14] == 0 && cset_a[12:0] == 0 && cset_b[36:14] == 0 && cset_b[12:0] == 0);
-            assert (role_a == 2'd0 && (role_b == 2'd0 || role_b == 2'd1));
+            assert (role_a == 2'd0 && (norx ? role_b == 2'd3 : role_b == 2'd0 || role_b == 2'd1));
             // Only the states of timed bits, between ticks: settling and
             // finishing a bit take no tick of their own here.
-            assert (s_a <= S_MID && s_b <= S_MID);
+            assert (s_a <= S_MID && s_b <= S_MID && s_c <= S_MID);
+            if (ins_c[31:28] != 4'd1) begin assert (s_c == S_BOOT || c_exec || (ins_c[31:28] == 4'd2 && c_claim)); end
+            else assert (c_exec || c_sync || c_edge || c_mid);
+            assert (at_c < PROG_LEN && at_c < PC_BADDEL);
             // Only bit instructions wait on the bus, and only `idle` claims;
             // the rest take a tick each.
             if (ins_a[31:28] != 4'd1) begin assert (s_a == S_BOOT || a_exec || (ins_a[31:28] == 4'd2 && a_claim)); end
@@ -704,10 +809,16 @@ module can_ind (input clk);
             // again at once when it pulls BUS low itself.
             assert (rq == rq1);
             assert (held_a == (low_a1 ? 32'd0 : {16'd0, held_seen})
-                    && held_b == (low_b1 ? 32'd0 : {16'd0, held_seen}));
+                    && held_b == (low_b1 ? 32'd0 : {16'd0, held_seen}) && held_c == {16'd0, held_seen});
             if (!g_fell) assert ((idle && !m_fr) || (stuffed && m_i == 0 && !m_stuff
                                  && ((tq == 12'd1 && !m_fr) || (tq == 12'd2 && m_fr))));
-            assert (cset_a[13] == cset_b[13] && lf_a == lf_b);
+            assert (lf_a == lf_b && lf_a == lf_c && cset_b[13] == cset_c[13]);
+            // The sender can forget a fall a tick before the others: at a hold
+            // trap that fires on them but not on it, as it pulls BUS low.
+            assert (cset_a[13] == cset_b[13] || (cset_b[13] && norx && low_a1 && now_a - lf_a == 12'd1024
+                                                 && held_b[15:0] == can_hold_ticks(BIT)));
+            if (cset_b[13]) assert (lf_b == seen_fall && (now_b - lf_b < 12'd1024
+                                    || (now_b - lf_b == 12'd1024 && held_b[15:0] == can_hold_ticks(BIT))));
             // A hart forgets a fall 1024 ticks on, but not on a tick its hold
             // trap fires.
             if (cset_a[13]) assert (lf_a == seen_fall && (now_a - lf_a < 12'd1024
@@ -721,8 +832,16 @@ module can_ind (input clk);
             // range of the harts' 12-bit clock.
             if (cset_a[13] && stuffed)
                 assert ((lf_a == cs + 12'd2 && tq >= 12'd2) || lf_age + 16'd2 >= {4'd0, tq} + {4'd0, d});
+            // The age of the last fall, in whole bits: a dominant run and the
+            // recessive bits after it.
+            if (cset_a[13] && ((stuffed && m_i != 0) || (norx && (tail || (idle && m_fr)))))
+                assert ({2'd0, lf_age} + 18'd2 == ((stuffed && m_last && !m_bus && tq >= 12'd2) ? 18'd0 : {14'd0, lfb} * {6'd0, d})
+                        + (idle ? {2'd0, m_it} + 18'd13 * {6'd0, d} : {6'd0, tq} + (tail ? {14'd0, m_tail} * {6'd0, d} : 18'd0)));
+            if (m_i != 0 || tail) assert (g_dom >= 3'd1 && g_dom <= 3'd5 && (m_last || g_dom == m_run));
+            if (tail || (idle && m_fr)) assert (m_run >= 3'd1 && m_run <= 3'd4 && g_dom >= 3'd1 && g_dom <= 3'd5 && (m_last || g_dom == m_run));
             if (cset_a[13] && tail) begin
-                if (m_tail == 0 || (m_tail == 4'd1 && tq < 12'd4)) begin assert (lf_age + 16'd2 >= {4'd0, tq} + {4'd0, d}); end
+                if (norx) begin end
+                else if (m_tail == 0 || (m_tail == 4'd1 && tq < 12'd4)) begin assert (lf_age + 16'd2 >= {4'd0, tq} + {4'd0, d}); end
                 else assert (lf_age + 16'd4 == {4'd0, tq} + {12'd0, m_tail - 4'd1} * {4'd0, d});
             end
             if (stuffed && !(m_i == 0 && !m_stuff)) begin
@@ -731,7 +850,8 @@ module can_ind (input clk);
             end
             if (stuffed && m_i == 0 && !m_stuff) assert (rqv == 0 && g_fall == cs);
             if (tail) begin
-                if (m_tail == 0) begin assert (rqv == rec_before + tq + 16'd1); end
+                if (norx) begin assert (rqv == rec_before + {4'd0, m_tail} * {4'd0, d} + tq + 16'd1); end
+                else if (m_tail == 0) begin assert (rqv == rec_before + tq + 16'd1); end
                 else if (m_tail == 1) begin assert (rqv == (tq < 12'd2 ? rec_before + d + tq + 16'd1 : 16'd0)); end
                 else if (m_tail == 2 && tq < 12'd2) begin assert (rqv == 0); end
                 else assert (rqv == {4'd0, m_tail - 4'd2} * {4'd0, d} + tq - 16'd1);
@@ -740,9 +860,10 @@ module can_ind (input clk);
             // ---- The tail ----
             if (tail || idle) begin
                 assert (!code_a[1] && !code_b[1] && rx_a == m_sh && rx_b == m_sh && count_a == 0 && count_b == 0);
+                assert (!code_c[1] && rx_c == m_sh && count_c == 0);
             end
             if (tail) begin
-                assert (!low_a && code_a[22:8] == 0 && code_b[22:8] == 0 && role_b == 2'd1);
+                assert (!low_a && code_a[22:8] == 0 && code_b[22:8] == 0 && role_b == rl_b);
                 // Hart a.
                 if (m_tail == 4'd0) begin
                     if (a_pre) begin assert (a_mid && at_a == PC_CRCDEL && since_a == tq && mine_a && val_a); end
@@ -780,12 +901,12 @@ module can_ind (input clk);
                 // Hart b.
                 if (!b_hist) begin
                     if (m_tail == 4'd0 || (m_tail == 4'd1 && tq < 12'd2)) begin
-                        assert (b_edge && at_b == PC_ACK && mine_b && !low_b
+                        assert (b_edge && at_b == PC_ACK && mine_b == !norx && !low_b
                                 && ahead_b == (m_tail == 4'd0 ? d + 12'd2 - tq : 12'd2 - tq));
                     end else if (b_cell == 4'd1) begin
                         // Hart b's ACK: dominant from its edge to its next bit.
-                        assert (low_b);
-                        if (b_t < h) begin assert (b_mid && at_b == PC_ACK && since_b == b_t && mine_b && !val_b); end
+                        assert (low_b == !norx);
+                        if (b_t < h) begin assert (b_mid && at_b == PC_ACK && since_b == b_t && mine_b == !norx && (norx || !val_b)); end
                         else begin
                             assert (ahead_b == d - b_t);
                             if (b_t == h) begin assert (b_exec && at_b == PC_TAIL); end
@@ -800,6 +921,35 @@ module can_ind (input clk);
                             else if (b_t == h) begin assert (b_exec && at_b == PC_TJUMP); end
                             else if (b_t == h + 12'd1) begin assert (b_exec && at_b == PC_IDLE); end
                             else assert (at_b == PC_IDLE && b_claim);
+                        end
+                    end
+                end
+            end
+
+            // Hart c in the tail, up to its ACK slot two ticks behind hart a.
+            if (tail) begin
+                assert (code_c[22:8] == 0);
+                if (!c_hist) begin
+                    if (m_tail == 4'd0 || (m_tail == 4'd1 && tq < 12'd2)) begin
+                        assert (c_edge && at_c == PC_ACK && ahead_c == (m_tail == 4'd0 ? d + 12'd2 - tq : 12'd2 - tq));
+                    end else if (m_tail == 4'd1) begin
+                        if (tq < h + co)
+                            begin assert (c_mid && at_c == PC_ACK && since_c == (tq >= co ? tq - co : tq - 12'd2)); end
+                        else begin
+                            assert (ahead_c == d + co - tq);
+                            if (tq == h + co) begin assert (c_exec && at_c == PC_TAIL); end
+                            else assert (c_edge && at_c == PC_TAIL && k_c == 0);
+                        end
+                    end else if (c_late && c_cell == 4'd1) begin
+                        assert (c_edge && at_c == PC_TAIL && k_c == 0 && ahead_c == co - tq);
+                    end else begin
+                        if (c_t < h) begin assert (c_mid && at_c == PC_TAIL && k_c == c_k && since_c == c_t); end
+                        else begin
+                            assert (ahead_c == d - c_t);
+                            if (c_k != 4'd10) begin assert (c_edge && at_c == PC_TAIL && k_c == c_k + 4'd1); end
+                            else if (c_t == h) begin assert (c_exec && at_c == PC_TJUMP); end
+                            else if (c_t == h + 12'd1) begin assert (c_exec && at_c == PC_IDLE); end
+                            else assert (at_c == PC_IDLE && c_claim);
                         end
                     end
                 end
@@ -824,13 +974,18 @@ module can_ind (input clk);
                 // The mode words run one a tick from reset, and nothing has
                 // been sampled since reset loaded the inputs from BUS.
                 if (at_a < PC_IDLE) assert (now_a == (s_a == S_BOOT ? 12'd0 : {6'd0, at_a} + 12'd1)
-                                            && m_it == {4'd0, now_a} && armed_a[0] && armed_b[0] && role_b == 2'd0);
+                                            && m_it == {4'd0, now_a} && armed_a[0] && armed_b[0] && role_b == (norx ? 2'd3 : 2'd0));
                 // Until the first frame, the idle count is the time since reset.
                 if (!m_fr) assert (m_it == 16'hFFFF || m_it[11:0] == now_a);
                 if (at_b == PC_IDLE) assert ((b_exec || b_claim) && armed_b[0]
                                              && ahead_b == ((m_fr && m_it < 12'd2) ? 12'd2 - m_it : 12'd0));
                 if (at_b < PC_IDLE) assert (!m_fr && edge_b == now_b && (s_b == S_BOOT || b_exec)
                                             && at_b == at_a && s_b == s_a);
+                assert (!partial_c[0] && at_c <= PC_IDLE);
+                if (at_c == PC_IDLE) assert ((c_exec || c_claim) && armed_c[0]
+                                             && ahead_c == ((m_fr && m_it < {4'd0, co}) ? co - m_it[11:0] : 12'd0));
+                if (at_c < PC_IDLE) assert (!m_fr && edge_c == now_c && (s_c == S_BOOT || c_exec)
+                                            && at_c == at_a && s_c == s_a && armed_c[0]);
                 if (!m_fr && m_bus) assert (rqv == (m_it == 16'hFFFF ? m_it : m_it + 16'd1));
                 // After a frame: the tail's 11 recessive bits, less the tick the
                 // receiver's ACK ends late, and the idle time; added wide, as both
@@ -840,7 +995,8 @@ module can_ind (input clk);
                 // into its slot, 12 bits less 4 ticks before the idle count began.
                 // So at a hold trap it is 21 bits less a tick old, never just
                 // 1024 ticks, when a hart that fires would keep it a tick longer.
-                if (cset_a[13]) assert (m_fr && {6'd0, now_a - lf_a} == {2'd0, m_it} + 18'd12 * {6'd0, d} - 18'd4);
+                if (cset_a[13]) assert (m_fr);
+                if (cset_a[13] && !norx) assert ({6'd0, now_a - lf_a} == {2'd0, m_it} + 18'd12 * {6'd0, d} - 18'd4);
             end
 
             // ---- Hart b joins a frame ----
@@ -850,16 +1006,24 @@ module can_ind (input clk);
                 // only a tick later: it is then back at `idle` and claims next.
                 if (tq <= 12'd1) begin assert (at_b == PC_IDLE && (b_claim || (b_exec
                                                && held_b[15:0] == can_hold_ticks(BIT)))); end
-                else if (tq == 12'd2) begin assert (at_b == PC_STUFF && b_exec && role_b == 2'd1); end
-                else if (tq == 12'd3) begin assert (at_b == PC_LOSE && b_exec && role_b == 2'd1); end
-                else assert (at_b == PC_SOF && b_exec && role_b == 2'd1);
+                else if (tq == 12'd2) begin assert (at_b == PC_STUFF && b_exec && role_b == rl_b); end
+                else if (tq == 12'd3) begin assert (at_b == PC_LOSE && b_exec && role_b == rl_b); end
+                else assert (at_b == PC_SOF && b_exec && role_b == rl_b);
             end
-            if (stuffed && !(m_i == 0 && !m_stuff && tq <= 12'd4)) assert (b_hist);
+            if (stuffed && !(m_i == 0 && !m_stuff && tq <= 12'd4)) assert (b_hist && c_hist);
+            if (stuffed && m_i == 0 && !m_stuff && tq <= 12'd4) begin
+                assert (armed_c[0] && count_c == 0 && rx_c == m_sh);
+                if (tq <= 12'd1) begin assert (at_c == PC_IDLE && (c_claim || (c_exec
+                                               && held_c[15:0] == can_hold_ticks(BIT)))); end
+                else if (tq == 12'd2) begin assert (at_c == PC_STUFF && c_exec); end
+                else if (tq == 12'd3) begin assert (at_c == PC_LOSE && c_exec); end
+                else assert (at_c == PC_SOF && c_exec);
+            end
 
             // DATA: each hart stores each field as hart a sent it.
             if (push_a) assert ((pdata_a & xm_a) == (xv_a & xm_a));
-            if (push_b) assert ((pdata_b & xm_b) == (xv_b & xm_b));
-            assert (push_a == st_a && push_b == st_b);
+            if (tk_b) assert ((pdata_b & xm_b) == (xv_b & xm_b));
+            assert (push_a == st_a && tk_b == st_b);
         end
     end
 endmodule

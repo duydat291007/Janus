@@ -28,7 +28,13 @@ module tb_can_arb_ind;
     integer   na = 0, nb = 0;
     wire      va = na != 0, vb = nb != 0;
 
-    can_arb_ind dut (.clk(clk), .BIT(BIT), .start(start), .unwritten(32'h9F800000),
+    reg [7:0] wa_f [0:63], wc_f [0:63];  // fields hart a stored, and the witness logged
+    integer   ta = 0, tc = 0;
+    reg       valid_c = 0;           // what the witness finds queued
+    reg [7:0] data_c = 0;
+    reg [1:0] ctl_c = 0;
+    can_arb_ind dut (.addr_c(8'd0), .valid_c(valid_c), .data_c(data_c), .ctl_c(ctl_c),
+        .clk(clk), .BIT(BIT), .start(start), .unwritten(32'h9F800000),
         .addr_a(8'd0), .addr_b(8'd0), .other(other),
         .valid_a(va), .data_a(qa[0]), .ctl_a(2'd0), .valid_b(vb), .data_b(qb[0]), .ctl_b(2'd0));
     wire [7:0] pd_a = dut.pdata_a, pd_b = dut.pdata_b;
@@ -102,10 +108,23 @@ module tb_can_arb_ind;
         #1;
         ticks = ticks + 1;
         other = $random(seed);
+        {valid_c, data_c, ctl_c} = $random(seed);
         if (pop_a && na > 0) begin for (i = 0; i < 15; i = i + 1) qa[i] = qa[i + 1]; na = na - 1; end
         if (pop_b && nb > 0) begin for (i = 0; i < 15; i = i + 1) qb[i] = qb[i + 1]; nb = nb - 1; end
         if (clr_a) begin na = 0; clears_a = clears_a + 1; end
         if (clr_b) begin nb = 0; clears_b = clears_b + 1; end
+        // The witness's log, field by field, against what hart a stores.
+        if (push_a) begin
+            if (tc > ta && wc_f[ta % 64] !== pd_a) begin errors = errors + 1; $display("ARB witness field differs at %0d", ticks); end
+            wa_f[ta % 64] = pd_a;
+            ta = ta + 1;
+        end
+        if (dut.seen_c) begin
+            if (ta > tc && wa_f[tc % 64] !== dut.pdata_c) begin errors = errors + 1; $display("ARB witness field differs at %0d", ticks); end
+            wc_f[tc % 64] = dut.pdata_c;
+            tc = tc + 1;
+        end
+        if (ta > tc + 1 || tc > ta + 1) begin errors = errors + 1; $display("ARB witness log out of step at %0d", ticks); end
         if (push_a) begin if (ka < 32) sa[ka] = pd_a; ka = ka + 1; end
         if (push_b) begin if (kb < 32) sb[kb] = pd_b; kb = kb + 1; frames = frames + (kb % 64 == 0); end
 

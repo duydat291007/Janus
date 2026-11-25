@@ -1501,9 +1501,10 @@ read. CAN and USB are not proven whole.
 
 `rtl/can_ind.sv` proves the CAN program the way the other four proofs prove
 theirs: the real program, 35 words taken from the assembler by
-`rtl/gen_can_rom.py`, on two real harts. Both start as possible senders. Hart
+`rtl/gen_can_rom.py`, on three real harts. Two start as possible senders. Hart
 a has a queue of frames to send; hart b's queue stays empty, so it always
-ends up the receiver. It covers what the others never use: a claim that
+ends up the receiver. Hart c is a witness. Or no receiver is there, and hart b
+is a second witness. It covers what the others never use: a claim that
 decides the role by whether the hart has a frame to send, bit stuffing sent
 and checked, a CRC computed as the bits go and checked by the receiver, a
 loop whose count comes from a received field, resynchronisation on falling
@@ -1518,10 +1519,16 @@ late, and the sender, a listener there, moves its bit edge to that fall from
 a bit time of 16 ticks on. From the ACK on, the sender runs 4 ticks late and
 the receiver 2.
 
+The witness is in step with the receiver up to the ACK slot. There it listens,
+moves its edge to the ACK's fall, which it sees 4 ticks into the slot, and
+runs 4 ticks late from then on. With no receiver the slot stays recessive and
+nobody's edge moves.
+
 Free: the bit time, from 11 to 2047 ticks; the load address; hart a's queue,
 with any entries arriving, changing or leaving at any time; the three unused
-pins on every tick; and the unwritten program words. Assumed: both harts
-leave reset together with the program's hold trap set; when hart a takes a
+pins on every tick; what the witness finds in its queue, which it never uses;
+whether a receiver is there; and the unwritten program words. Assumed: the
+harts leave reset together with the program's hold trap set; when hart a takes a
 control field, an entry is there with RTR and IDE clear, as a host that
 queues base data frames gives it; and the bus is open drain, low exactly when
 a hart pulls it low.
@@ -1530,18 +1537,21 @@ What it claims:
 
 - DATA. Each hart stores each field as hart a sent it: the top three bits of
   the identifier, the other eight, the control field and every data byte,
-  and pushes exactly when it stores.
+  and pushes exactly when it stores. The witness logs each field on the tick
+  the receiver stores it.
 - WIRE. A monitor that sees only the bus and knows only the textbook rules
   for a base data frame reads a dominant start of frame, an identifier,
   dominant RTR and IDE bits, a length and as many data bytes as it asks for
   (8 at most), each byte the one hart a took, then a CRC equal to the
   monitor's own CRC-15 of the bits before it, after five equal bits always a
-  stuff bit of the other value, then a recessive CRC delimiter, a dominant
-  ACK slot and 11 recessive bits. Every bit lasts exactly the bit time: the
+  stuff bit of the other value, then a recessive CRC delimiter, an ACK slot
+  that is dominant when a receiver is there, and 11 recessive bits. Every bit lasts exactly the bit time: the
   bus changes only where a bit starts, except for the receiver's ACK, which
   starts and ends two ticks into its bits.
-- CLEAN. No violations, no arbitration loss, no queue cleared, no other pin
-  touched.
+- VIOLATIONS. Every hart counts each frame nobody acknowledged, once, as it
+  reads the ACK slot, and nothing else. With a receiver there are none.
+- CLEAN. No arbitration loss, no queue cleared, no other pin touched. The
+  witness drives nothing and takes nothing from its queue.
 - LIVE. Each hart rests only in the states of timed bits and the claim, and
   between frames both wait at `idle`.
 
@@ -1560,20 +1570,26 @@ from 12-bit and 16-bit sums that wrap: at long bit times a fall a bit time
 old and the idle count near 65,535 looked like small numbers. One was a real
 bug, below.
 
-The proof runs with Bitwuzla at depth 4 and closes in 9 minutes. Yices, which
-the other proofs use, did not finish the same last query in 4 hours 40
-minutes. Depth 4 is as sound as the 12 of the other proofs; it needs
-stronger invariants, which this one has.
+The proof runs with Bitwuzla at depth 4 and closes in 32 minutes on a machine
+running three other solvers. With the sender and receiver alone it took 9, and
+13.5 with the witness and a receiver always there. Yices, which the other
+proofs use, did not finish the last query of the first version in 4 hours 40
+minutes. Depth 4 is as sound as the 12 of the other proofs; it needs stronger
+invariants, which this one has.
 
-It is not vacuous. 36 planted bugs: 13 in the program, 13 in the hart, 1
-that both harts share (least significant bit first), 5 in the monitor's own
-rules and 4 that weaken its assumptions. 34 break it. Two survive, as they
-should: a receiver that never finds a bad CRC, since every frame here is
-good; and a wrong input lag in `sync`, which the resynchronisation right
-after the start of frame corrects. 31 fail one of the harness's assertions
-on a real run, which already means the proof cannot pass; the solver breaks
-the other 3, which weaken an assumption. One of the hart bugs undoes the fix
-below.
+It is not vacuous. 45 planted bugs: 13 in the program, 20 in the hart, 1
+that both harts share (least significant bit first), 6 in the monitor's own
+rules, 1 in which hart sits where and 4 that weaken its assumptions. 43 break
+it. Two survive, as they should: a receiver that never finds a bad CRC, since
+every frame here is good; and a wrong input lag in `sync`, which the
+resynchronisation right after the start of frame corrects. 40 fail one of the
+harness's assertions on a real run, which already means the proof cannot pass;
+the solver breaks the other 3, which weaken an assumption. One of the hart
+bugs undoes the fix below. Six are aimed at the witness (it logs nothing,
+stores as a receiver does, acknowledges, counts no violations, claims, codes
+every bit as 0) and two at a missing ACK. The bugs in its log, its ACK and its
+count, and a listener that ignores a missing ACK, were checked to fail a
+claim, not only an invariant.
 
 A fourth assumption, that an entry stays at the head of hart a's queue until
 it is popped, turned out not to be needed and was removed: hart a reads its
@@ -1581,11 +1597,21 @@ queue only to claim the bus and on the tick it takes a byte, and a byte taken
 from an empty queue is FF, which the claims follow.
 
 `rtl/sim_can.sh` simulates the same harness on random inputs, with its own
-scoreboard: 54 runs at bit times from 11 to 2047 ticks, 856 frames (107 with
-fewer data bytes queued than their length asks for, sent as FF) and 7,267
-fields received over 19.3 million ticks, no failure. 24 of the runs queue each
-frame one to eight ticks before the hold trap would fire, at bit times 11, 16
-and 49, where the bug below was.
+scoreboard: 76 runs at bit times from 11 to 2047 ticks, 22 of them with no
+receiver; 1,168 frames (154 with fewer data bytes queued than their length
+asks for, sent as FF) and 9,703 fields received over 23.3 million ticks, no
+failure. The scoreboard compares the witness's log with what the receiver
+stores and counts the missing ACKs. 36 of the runs queue each frame one to
+eight ticks before the hold trap would fire, at bit times 11, 16, 41 and 49,
+where the bug below was.
+
+With no receiver the recessive run before the hold trap is longer, and the
+solver found a tick on which the harts differ. At a bit time of 41 ticks, when
+the frame's last dominant run was five bits, the last fall turns exactly 1,024
+ticks old, where a hart forgets it, on the tick the trap fires. A hart that
+traps skips that step for a tick. A sender already pulling the bus low does
+not trap and forgets the fall a tick before the others. Nothing uses the fall
+on that tick; the proof says so instead of claiming the harts equal.
 
 #### Fix: the hold trap could cut off a start of frame
 
@@ -1693,15 +1719,19 @@ ticks: two senders need a bit time of at least 12 ticks, 2.08 Mbit/s at
 
 #### The arbitration proof
 
-`rtl/can_arb_ind.sv` runs the program on two harts with both queues free,
-bit times from 12 to 2047 ticks. It claims that the monitor reads the
+`rtl/can_arb_ind.sv` runs the program on three harts, two possible senders
+with both queues free and a witness, at bit times from 12 to 2047 ticks. It
+claims that the monitor reads the
 winner's frame (the smaller identifier), a sender stores each field as it
 took it and both harts store the same fields, only the loser loses and its
 queue is cleared as it does, and that the bus changes only where the
 winner's bits start, or while two still send, where either sender's do; the
-ACK falls in its slot at most 6 ticks in and lasts a bit. It assumes that two
+ACK falls in its slot at most 6 ticks in and lasts a bit. The witness drives
+nothing, counts nothing, and logs each field of the winner's frame once, as
+the monitor read it from the bus. It assumes that two
 frames that arbitrate have different identifiers. It passes: k-induction at
-depth 4 with Bitwuzla, 26 minutes (`rtl/prove_can_arb.sh`).
+depth 4 with Bitwuzla, 48 minutes on a machine running three other solvers
+(`rtl/prove_can_arb.sh`), 26 before the witness joined.
 
 The invariants describe each hart by its role and its offset: how many ticks
 its bits start after the monitor's. The first start of frame sets 0, a second
@@ -1720,15 +1750,27 @@ solver could fill it with anything. The monitor also logs each field as it
 reads its last bit, before any hart stores it, and each hart's stores are
 checked against that log. `rtl/sim_can_arb_ind.sh` checks every claim and
 invariant once a tick: 75 runs, every skew from 6 ticks either way and runs
-where both queues refill as soon as they empty, with no failure.
+where both queues refill as soon as they empty, with no failure. Its
+scoreboard compares the witness's log with the fields hart a stores.
 
-`rtl/mutate_can_arb.sh` plants 17 bugs, and each one breaks the proof. 14
+The witness is a listener to two senders at once. It joins at 2. While both
+send, the bus falls at the earlier one's edges, so it stays there. If the
+later one wins, it moves to 2 ticks after that one when that is within a
+quarter bit, and in the ACK slot to 2 ticks after the ACK's fall. One case
+does not move it: below a bit time of 16 ticks, a receiver whose own start of
+frame came 4 ticks after the winner's acknowledges too far from its edge. It
+then reads the slot from where it is, still inside the ACK. The offsets were
+worked out on paper first, and the simulation agreed with them on its first
+run.
+
+`rtl/mutate_can_arb.sh` plants 23 bugs, and each one breaks the proof. 20
 fail in simulation: arbitration never switched on or left on, the loser
 turned into a witness, kept sending or kept its queue, a sender that loses
 on the wrong reading, no stuffing, no resynchronisation, a claim that ignores
 a falling line, a recessive ACK, a monitor that crowns the larger identifier
-or puts the winner on the earlier sender's grid, and another device on the
-bus. The solver takes the other three. Bit times of 11 ticks break the claim
+or puts the winner on the earlier sender's grid, another device on the bus,
+and a witness that logs nothing, stores as a receiver does, acknowledges,
+claims, codes every bit as 0 or does not resynchronise. The solver takes the other three. Bit times of 11 ticks break the claim
 that no hart counts a violation, as traced above. Frames that may share an
 identifier, and a hart that claims as a sender after seeing a start of frame,
 break the invariants that state those limits: the induction can no longer
@@ -1745,12 +1787,12 @@ queue is. The proof's queues are free inputs, so a loser that kept its frame
 changed nothing the claims looked at. The claim is now there, and a hart
 planted to keep its queue breaks it.
 
-Limits: two harts; every frame is good, so the receiver's checks of a bad CRC, a stuff
-error and a missing ACK are not covered, though model tests check them; no
-error frames or retransmission, as in the program; base data frames only;
-both harts start together, share one clock and see the bus with no
-propagation delay; no prescaler; the queues, pin rotation and host port are
-outside it. USB is not proven whole.
+Limits: two nodes at most and a witness; every frame is good, so the checks of
+a bad CRC and a stuff error are not covered, though model tests check them; a
+missing ACK is covered with one sender, not in arbitration; no error frames or
+retransmission, as in the program; base data frames only; the harts start
+together, share one clock and see the bus with no propagation delay; no
+prescaler; the queues, pin rotation and host port are outside it.
 
 ### The sixth protocol proven whole: USB
 
@@ -1758,8 +1800,9 @@ outside it. USB is not proven whole.
 proofs prove theirs: the real program, 48 words taken from the assembler by
 `rtl/gen_usb_rom.py`, on three real harts. Hart a is the host, with a queue;
 hart b is the device, whose one byte to send, the ACK, is in the program, or
-a second witness when no device is there; hart c is a witness. It covers what no other proof reaches: the complementary pin pair, NRZI coding,
-stuffing of ones only, a CRC that restarts at all ones and is sent changed by
+a second witness when no device is there; hart c is a witness. It covers what
+no other proof reaches: the complementary pin pair, NRZI coding, stuffing of
+ones only, a CRC that restarts at all ones and is sent changed by
 `xor`, the CRC16 the host hart computes and sends on RESTART, break bits and
 a listener's jump on a break, a packet's type read from its PID into the
 counter, the turnaround in which the device takes the bus, and a hold trap

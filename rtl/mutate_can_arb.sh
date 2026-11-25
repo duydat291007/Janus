@@ -80,6 +80,13 @@ mutant "no resynchronisation" hart 's/if (none \&\& lf_valid \&\& diff <= {3.b0,
 mutant "claim ignores a falling line" hart 's/if ((base_role == i_owner \&\& tx_valid) || !pin\[i_pin\]) begin/if (base_role == i_owner \&\& tx_valid) begin/'
 mutant "a claim with a frame queued is a sender even after a fall" hart 's/role = (tx_valid \&\& pin\[i_pin\]) ? i_owner : ins\[21:20\];/role = tx_valid ? i_owner : ins[21:20];/'
 
+mutant "a witness logs nothing" hart 's/else if (role == WITNESS) seen_push_r = 1.b1;/else if (1\x27b0) seen_push_r = 1\x27b1;/'
+mutant "a witness stores as a receiver does" hart 's/if (is_mine(i_party, role)) rx_push_r = 1.b1;/if (is_mine(i_party, role) || role == WITNESS) rx_push_r = 1\x27b1;/'
+mutant "a witness acknowledges" hart 's/(r != WITNESS) : (r == party);/(r != WITNESS) : (r == party || (r == WITNESS \&\& party == 2\x27d1));/'
+mutant "a hart with a queue claims whatever its role" hart 's/if ((base_role == i_owner \&\& tx_valid) || !pin\[i_pin\])/if (tx_valid || !pin[i_pin])/'
+mutant "a witness codes every bit as 0" hart 's/(cur_mine \&\& is_mine(i_owner, role)) ? val : seen;/(cur_mine \&\& is_mine(i_owner, role)) ? val : (seen \&\& role != WITNESS);/'
+mutant "a witness does not resynchronise" hart 's/resync(!cur_mine);/resync(!cur_mine \&\& role != WITNESS);/'
+
 # The monitor: a wrong idea of arbitration must not fit the wire.
 mutant "monitor's winner is the larger identifier" proof 's/f1b\[7:5\] < f1a\[7:5\] || (f1b\[7:5\] == f1a\[7:5\] \&\& f2b < f2a)/f1b[7:5] > f1a[7:5] || (f1b[7:5] == f1a[7:5] \&\& f2b > f2a)/'
 mutant "monitor's winner sends at the earlier sender's edge" proof 's/wire        late_w = con \&\& (w_b != early_b);/wire        late_w = 1\x27b0;/'
