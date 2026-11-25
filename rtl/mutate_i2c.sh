@@ -45,7 +45,7 @@ one() {
         if [ -n "$line" ]; then echo "BROKE PROOF (simulation, half ${hs%:*}, line $line) $name"; rm -rf "$D"; return; fi
     done
     (cd "$D" && timeout -k 30 5400 sby -f i2c_ind.sby h8 > sby.txt 2>&1); code=$?
-    for p in $(pgrep yices-smt2); do
+    for p in $(pgrep bitwuzla); do
         case "$(readlink /proc/$p/cwd)" in "$D"*) kill "$p" ;; esac
     done
     result=$(grep -E "DONE" "$D/sby.txt" | sed 's/.*DONE (\([A-Z]*\).*/\1/')
@@ -99,6 +99,13 @@ mutant "match does not step aside" hart 's/role = WITNESS;$/;/'
 # The owner of a released line waits for it to rise, but here nothing holds
 # SDA or SCL low then, so the wait is never needed.
 mutant "settle does not wait (expected to survive: nothing holds a released line)" hart 's/if (!(od_mask\[i_pin\] \&\& pin\[i_pin\] != ((c_nrzi || faulty) ? ov_r\[i_pin\] : val)))/if (1)/'
+
+mutant "a witness logs nothing" hart 's/else if (role == WITNESS) seen_push_r = 1.b1;/else if (1\x27b0) seen_push_r = 1\x27b1;/'
+mutant "a witness stores as a receiver does" hart 's/if (is_mine(i_party, role)) rx_push_r = 1.b1;/if (is_mine(i_party, role) || role == WITNESS) rx_push_r = 1\x27b1;/'
+mutant "a witness sends the bits of the target" hart 's/(r != WITNESS) : (r == party);/(r != WITNESS) : (r == party || (r == WITNESS \&\& party == 2\x27d1));/'
+mutant "a witness owns the choices of the controller" hart 's/(r != WITNESS) : (r == party);/(r != WITNESS) : (r == party || (r == WITNESS \&\& party == 2\x27d0));/'
+mutant "a hart with a queue claims whatever its role" hart 's/if ((base_role == i_owner \&\& tx_valid) || !pin\[i_pin\])/if (tx_valid || !pin[i_pin])/'
+mutant "a witness answers when its own address is sent" hart 's/if (is_mine(i_party, role) \&\& (rx0 >> ins\[25:23\]) != addr_reg)/if ((rx0 >> ins[25:23]) == addr_reg) role = 2\x27d1; else if (is_mine(i_party, role) \&\& (rx0 >> ins[25:23]) != addr_reg)/'
 
 # A bug both harts share. They still agree with each other, so only the
 # textbook rule can tell.

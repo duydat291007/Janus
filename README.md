@@ -71,18 +71,20 @@ Everything below was checked in simulation or by formal proof.
   least 480 ticks, a presence pulse in its window and those same bytes.
   Building it exposed a bug, now fixed: a second transaction cleared the
   target's queue.
-- A fourth protocol is proven whole: I2C, controller and target, for any
-  half period from 8 ticks and any target address. It covers what the others
-  do not use: START and STOP traps that fire on one line's edge while the
-  other is high, an address match after which a target that was not
-  addressed steps aside, branches on the R/W bit and on ACK or NACK, a
-  choice on the controller's queue between data, STOP and RESTART, and
-  clocked bits on open-drain lines. The target stores the address and every
-  byte written, the controller every byte read, and a monitor that knows
-  only the textbook rules reads the same bytes and acknowledges and checks
-  the timing: SCL low and high, data setup and hold, START setup and hold,
-  STOP setup, and bus free time. Building it exposed a timing bug, now fixed: the
-  next START could come 4 ticks after a STOP, whatever the clock rate.
+- A fourth protocol is proven whole, in all three roles at once: I2C,
+  controller, target and witness, for any half period from 8 ticks and any
+  target address. It covers what the others do not use: START and STOP traps
+  that fire on one line's edge while the other is high, an address match after
+  which a target that was not addressed steps aside, branches on the R/W bit
+  and on ACK or NACK, a choice on the controller's queue between data, STOP and
+  RESTART, and clocked bits on open-drain lines. The target stores the address
+  and every byte written, the controller every byte read, the witness drives
+  nothing and logs every byte of every transaction on the same ticks, and a
+  monitor that knows only the textbook rules reads the same bytes and
+  acknowledges and checks the timing: SCL low and high, data setup and hold,
+  START setup and hold, STOP setup, and bus free time. Building it exposed a
+  timing bug, now fixed: the next START could come 4 ticks after a STOP,
+  whatever the clock rate.
 - A fifth protocol is proven whole, in all three roles at once: CAN, a sender,
   a receiver or none, and a witness, for any bit time from 11 ticks. It covers
   what the others do not use: a claim that picks the role by whether a frame is

@@ -1,6 +1,7 @@
 // Unbounded proof by k-induction of a fourth complete protocol: the I2C
-// program from protocols.py, word for word as the assembler emits it, on two
-// real harts. Hart c is the controller (role C) and hart t the target (role T).
+// program from protocols.py, word for word as the assembler emits it, on
+// three real harts. Hart c is the controller (role C), hart t the target
+// (role T) and hart w a witness, which drives nothing and logs.
 //
 // It covers what the other three proofs never reach: two traps that fire on
 // a line's edge only while another line is high (START and STOP), an
@@ -14,13 +15,13 @@
 //   HALF        the half period, any value from MINHALF to 2047 ticks
 //   start       the address the program is loaded at, 0 to 21
 //   addr_t      the target's own address: it may or may not be the one sent
-//   valid, data, ctl  both queues: any bytes and any STOP or RESTART
+//   valid, data, ctl  all three queues: any bytes and any STOP or RESTART
 //               entries, arriving at any time
 //   other       the two unused pins, on every tick
 //   unwritten   what the other 21 program words hold
 //
 // Assumed:
-//   - both harts leave reset on the same tick, with the program's two traps
+//   - the harts leave reset on the same tick, with the program's two traps
 //     set, no prescaler and no adversary fault;
 //   - an entry stays at the head of the controller's queue until it pops
 //     it, as in janus_fifo. The target's queue needs no such rule: the
@@ -45,9 +46,14 @@
 //          SDA still for HALF - 1 before SCL rises and for two ticks after
 //          it falls; SCL high for HALF before a START or STOP and after a
 //          START; the bus free for HALF between a STOP and the next START.
-//   CLEAN  neither hart counts a violation or loses arbitration, neither
-//          touches another pin, and the target never pulls SCL.
-//   LIVE   a hart rests only in the states listed below. The target is at the
+//   WITNESS  the witness drives nothing, never takes from its queue, and logs
+//          every byte of every transaction, on the tick the hart it is for
+//          stores it: the address, whoever it is for, each byte written and
+//          each byte read.
+//   CLEAN  no hart counts a violation or loses arbitration, none touches
+//          another pin, and the target never pulls SCL.
+//   LIVE   a hart rests only in the states listed below, and the witness is
+//          where the target is, always. The target is at the
 //          controller's word except while the controller sends START from
 //          `idle`, and at the end of a write that the controller's queue ends:
 //          the target does not own that choice, so it goes on to the next
@@ -60,7 +66,8 @@
 module i2c_ind (input clk, input [10:0] HALF, input [5:0] start, input [31:0] unwritten,
                 input [7:0] addr_c, addr_t, input [1:0] other,
                 input valid_c, valid_t, input [7:0] data_c, data_t,
-                input [1:0] ctl_c, ctl_t);
+                input [1:0] ctl_c, ctl_t,
+                input [7:0] addr_w, input valid_w, input [7:0] data_w, input [1:0] ctl_w);
     parameter MINHALF = 8;
 
     `include "i2c_rom.vh"
@@ -78,6 +85,10 @@ module i2c_ind (input clk);
     (* anyseq *)   wire        valid_c, valid_t;
     (* anyseq *)   wire [7:0]  data_c, data_t;
     (* anyseq *)   wire [1:0]  ctl_c, ctl_t;
+    (* anyconst *) wire [7:0]  addr_w;
+    (* anyseq *)   wire        valid_w;
+    (* anyseq *)   wire [7:0]  data_w;
+    (* anyseq *)   wire [1:0]  ctl_w;
 `endif
 
     // Reset: one tick of power-on reset, then two in which the host writes
@@ -105,16 +116,29 @@ module i2c_ind (input clk);
     wire        pop_c, pop_t, clear_c, clear_t, push_c, push_t, seen_c, seen_t, seen2_c, seen2_t;
     wire        lost_c, lost_t, insd_c, insd_t;
     wire [3:0]  keep_c, keep_t;
+    wire [7:0]  oe_w, ov_w, count_w, rx_w, pin_w, s1_w, armed_w, tx_w, viol_w, vout_w, pdata_w;
+    wire [87:0] code_w;
+    wire [111:0] cfg_w;
+    wire [47:0] cset_w;
+    wire [10:0] cnt_w;
+    wire [5:0]  pc_w;
+    wire [3:0]  s_w, k_w, prev_w, keep_w;
+    wire [4:0]  partial_w;
+    wire [11:0] now_w, edge_w;
+    wire [1:0]  role_w, src_w;
+    wire        last_w, mine_w, val_w, pop_w, clear_w, push_w, seen_w, seen2_w, lost_w, insd_w;
 
     // SCL and SDA are open drain with pull-ups: low exactly when a hart
-    // drives them low. The two other pins read whatever `other` says.
+    // drives them low. The two other pins read whatever `other` says. (The
+    // witness drives nothing, a claim below.)
     wire [1:0]  low = (oe_c[1:0] & ~ov_c[1:0]) | (oe_t[1:0] & ~ov_t[1:0]);
     wire [7:0]  bus = {4'hF, other, ~low};
 
     // Where each hart is in the program, counted from its first word.
-    wire [5:0]  at_c = pc_c - start, at_t = pc_t - start;
+    wire [5:0]  at_c = pc_c - start, at_t = pc_t - start, at_w = pc_w - start;
     wire [31:0] ins_c = i2c_word(at_c, HALF, start, unwritten);
     wire [31:0] ins_t = i2c_word(at_t, HALF, start, unwritten);
+    wire [31:0] ins_w = i2c_word(at_w, HALF, start, unwritten);
 
     janus_hart c (.clk(clk), .por(por), .rst(rst), .wire_in(bus), .oe(oe_c), .ov(ov_c),
         .od_mask(8'h03), .base_role(2'd0), .reset_pc(start), .addr_reg(addr_c), .pc(pc_c),
@@ -144,6 +168,21 @@ module i2c_ind (input clk);
         .dbg_code(code_t), .dbg_inserted(insd_t), .dbg_stuff_bit(), .dbg_width(),
         .dbg_viol(viol_t), .dbg_tx(tx_t), .dbg_cfg(cfg_t), .dbg_cset(cset_t),
         .dbg_cnt(cnt_t), .dbg_rx1(), .dbg_prev(prev_t), .dbg_held(), .dbg_keep(keep_t),
+        .dbg_clean());
+
+    janus_hart w (.clk(clk), .por(por), .rst(rst), .wire_in(bus), .oe(oe_w), .ov(ov_w),
+        .od_mask(8'h03), .base_role(2'd3), .reset_pc(start), .addr_reg(addr_w), .pc(pc_w),
+        .pc_sel(), .ins(ins_w), .tx_valid(valid_w), .tx_ctl(ctl_w), .tx_data(data_w),
+        .tx_pop(pop_w), .tx_clear(clear_w), .rx_push(push_w), .seen_push(seen_w),
+        .seen_push2(seen2_w), .push_data(pdata_w), .push_data2(), .violations(vout_w),
+        .arb_lost(lost_w), .cfg_we(cfg_we), .cfg_addr({2'd0, cfg_i}), .cfg_data(cfg_data),
+        .dbg_s(s_w), .dbg_count(count_w), .dbg_rx(rx_w), .dbg_last(last_w),
+        .dbg_now(now_w), .dbg_edge(edge_w), .dbg_dwell(), .dbg_k(k_w),
+        .dbg_partial(partial_w), .dbg_role(role_w), .dbg_src(src_w), .dbg_mine(mine_w),
+        .dbg_val(val_w), .dbg_pin(pin_w), .dbg_s1(s1_w), .dbg_armed(armed_w),
+        .dbg_code(code_w), .dbg_inserted(insd_w), .dbg_stuff_bit(), .dbg_width(),
+        .dbg_viol(viol_w), .dbg_tx(tx_w), .dbg_cfg(cfg_w), .dbg_cset(cset_w),
+        .dbg_cnt(cnt_w), .dbg_rx1(), .dbg_prev(prev_w), .dbg_held(), .dbg_keep(keep_w),
         .dbg_clean());
 
     localparam S_BOOT = 4'd0, S_EXEC = 4'd1, S_CLAIM = 4'd2, S_SYNC = 4'd3, S_EDGE = 4'd4,
@@ -375,6 +414,13 @@ module i2c_ind (input clk);
             // pulls SCL.
             assert (oe_c[7:2] == 0 && oe_t[7:2] == 0 && !(oe_t[0] && !ov_t[0]));
 
+            // WITNESS
+            assert (viol_w == 0 && vout_w == 0 && oe_w == 0 && role_w == 2'd3);
+            assert (!lost_w && !clear_w && !pop_w && !push_w && !seen2_w && keep_w == 0 && !insd_w);
+            assert (seen_w == (push_t || push_c));
+            if (push_t) assert (pdata_w == pdata_t);
+            if (push_c) assert (pdata_w == pdata_c);
+
             // DATA: what each hart takes and stores.
             assert (pop_c == took_c && pop_t == took_t);
             assert (push_t == stored_t && push_c == stored_c);
@@ -418,6 +464,14 @@ module i2c_ind (input clk);
             assert (at_c < PROG_LEN && at_t < PROG_LEN);
             assert (at_c != PC_HANG && at_c != PC_RS_JUMP && at_c != PC_SP_JUMP);
             assert (at_t != PC_HANG && at_t != PC_RS_JUMP && at_t != PC_SP_JUMP);
+
+            // The witness is where the target is, in every state: neither owns a
+            // choice or the clock, and the target's own bits take it no other way.
+            assert (at_w == at_t && s_w == s_t && k_w == k_t && edge_w == edge_t && now_w == now_t);
+            assert (rx_w == rx_t && last_w == last_t && armed_w == armed_t && partial_w == partial_t);
+            assert (pin_w == pin_t && s1_w == s1_t && count_w == 0 && cfg_w == cfg_t && code_w == code_t && cset_w == cset_t);
+            if (t_mid || t_sync) assert (!mine_w && src_w == src_t);
+            if (t_sync) assert (val_w == val_t);
 
             // What the set-up has written so far, in each hart: only most
             // significant bit first. The clock pin and its owner keep their

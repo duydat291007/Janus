@@ -1383,8 +1383,8 @@ gives the same warnings as before, none of them about the new code.
 
 `rtl/i2c_ind.sv` proves the I2C program the way the other three proofs
 prove theirs: the real program, taken from the assembler by
-`rtl/gen_i2c_rom.py`, on two real harts. It covers what the others never
-use: two traps that fire on one line's edge while the other line is high
+`rtl/gen_i2c_rom.py`, on three real harts: a controller, a target and a
+witness. It covers what the others never use: two traps that fire on one line's edge while the other line is high
 (START and STOP), an address match after which a target that was not
 addressed steps aside as a witness, branches on the bit just read (the R/W
 bit, ACK and NACK), a choice on the head of the controller's queue between
@@ -1402,9 +1402,16 @@ more, for the STOP or the repeated START, and the target reads that as the
 byte's first bit. The trap that follows brings both harts back together,
 and because the target is only at the first bit, it counts no broken byte.
 
+The witness is where the target is, on every tick: the same word, state, bit
+and received byte. A target that is not addressed steps aside as a witness
+after the match, and an addressed one differs from it only in what it drives.
+Neither owns the clock or a choice, so neither can go another way. That one
+equality is nearly all the proof of it needed.
+
 Free: the half period, from 8 to 2047 ticks; the target's own address, so
-it may or may not be the one sent; the load address; both queues, with data
-and STOP or RESTART entries arriving at any time; the two unused pins on
+it may or may not be the one sent; the load address; the witness's own
+address; the three queues, with data and STOP or RESTART entries arriving at
+any time (the witness never uses its own); the two unused pins on
 every tick; and the unwritten program words.
 
 What it claims:
@@ -1420,6 +1427,9 @@ What it claims:
   written; the controller's acknowledge is the top bit of its queue entry. A
   START or STOP comes only between bytes and only from the controller. And
   the timing rules in the table below.
+- WITNESS. The witness drives nothing, takes nothing from its queue, and logs
+  every byte of every transaction on the tick the hart it is for stores it:
+  the address, whoever it is for, each byte written and each byte read.
 - CLEAN. No violations, no arbitration loss, no other pin touched, and the
   target never pulls SCL.
 - LIVE. Each hart rests only in a short list of states, and the target is at
@@ -1429,32 +1439,38 @@ A target stores every address byte it sees, its own or not, before the
 match: that is how its host learns what the bus did. A model test already
 asks for it, and the proof claims it.
 
-The invariants were written from the harness simulation's trace. The
-solver's counterexamples then showed six more, each a value it was
-otherwise free to choose: the target's bit count, the level a timed bit is
-about to drive, the source of the bit the target waits for, the R/W bit
-that chose the path, and the monitor's own copy of it. The proof closes in
-16 minutes.
+The invariants were written from the harness simulation's trace. The solver's
+counterexamples then showed six more, each a value it was otherwise free to
+choose: the target's bit count, the level a timed bit is about to drive, the
+source of the bit the target waits for, the R/W bit that chose the path, and
+the monitor's own copy of it. The proof closes in 75 seconds with Bitwuzla at
+depth 4, on the witness's first solver run. Yices at depth 12, which it used
+before, took 16 minutes without the witness and 44 with it, and passes too.
+Depth 4 is as sound as 12; it needs invariants strong enough to close in 4
+steps, which these are.
 
-It is not vacuous. 48 planted bugs: 18 in the program, 17 in the hart, 1
+It is not vacuous. 54 planted bugs: 18 in the program, 23 in the hart, 1
 that both harts share (least significant bit first), 8 in the monitor's own
-rules and 4 that weaken its assumptions. 46 break it. Two survive, as they
+rules and 4 that weaken its assumptions. 52 break it. Two survive, as they
 should: a claim that ignores a falling line, since the target leaves `idle`
 only through the START trap, which runs first; and an owner that does not
 wait for a released line to rise, since nothing here holds one low. Each
-bug is first simulated in the proof's own harness, and 43 fail one of its
+bug is first simulated in the proof's own harness, and 49 fail one of its
 assertions on a real run, which already means the proof cannot pass; the
-solver breaks the other 3, the ones that weaken an assumption. The solver
-alone took hours on some of them: a bug that needs a whole transaction to
-show is past the 12 steps it checks from reset.
+solver breaks the other 3, which weaken an assumption. Six are aimed at the
+witness: it logs nothing, stores as a receiver does, sends the target's bits,
+owns the controller's choices, answers its own address, or claims the bus.
+All but the last fail a claim; a witness that claims early is brought back by
+the START trap before it does anything, and breaks only the equality.
 
 A fifth assumption, that the target's queue keeps its head until popped,
 turned out not to be needed and was removed: the target reads the queue
 only on the tick it takes the byte. `rtl/sim_i2c.sh` simulates the same harness on random
 inputs, with its own scoreboard that decodes the two wires separately: 26
-runs, 2,020 bytes in 920 transactions (226 writes and 124 reads
-acknowledged), 693 NACKs and 86 repeated STARTs over 8.8 million ticks, no
-failure.
+runs, 2,018 bytes in 782 transactions (258 writes and 124 reads
+acknowledged), 521 NACKs and 107 repeated STARTs over 8.8 million ticks, no
+failure. The scoreboard compares the witness's log with every byte on the
+wires, and now and then the controller sends the witness's own address.
 
 #### Fix: the bus was free for only 4 ticks between transactions
 
@@ -1488,14 +1504,14 @@ every standard-mode rule now holds: SCL low 10 µs (4.7 asked), high 9
 8 (4.0), bus free 11 (4.7; it was 4), and a data bit is on SDA 3 µs after
 SCL falls (3.45 at most).
 
-Limits: both harts start together and share one clock; one controller and
-one target, so no arbitration between controllers; no device holds SCL low,
+Limits: the harts start together and share one clock; one controller, one
+target and a witness, so no arbitration between controllers; no device holds SCL low,
 so no clock stretching (the program waits for a stretched clock and a model
 test checks it, but the proof does not cover it); no prescaler; the queues,
 pin rotation and host port are outside it, though the target's queue may
 even lose entries. A read always ends with the
 controller's NACK and a STOP: the program has no repeated START after a
-read. CAN and USB are not proven whole.
+read.
 
 ### A fifth protocol proven whole: CAN
 

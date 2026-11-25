@@ -38,7 +38,11 @@ module tb_i2c_ind;
     wire [7:0] data_c = qc[0], data_t = qt[0];
     wire [1:0] ctl_c = qk[0], ctl_t = 2'd0;
 
-    i2c_ind dut (.clk(clk), .HALF(HALF), .start(start), .unwritten(unwritten),
+    reg        valid_w = 0;          // what the witness finds queued
+    reg [7:0]  addr_w = 0;           // an address of its own, sent now and then
+    reg [7:0]  data_w = 0;
+    reg [1:0]  ctl_w = 0;
+    i2c_ind dut (.addr_w(addr_w), .valid_w(valid_w), .data_w(data_w), .ctl_w(ctl_w), .clk(clk), .HALF(HALF), .start(start), .unwritten(unwritten),
         .addr_c(addr_c), .addr_t(addr_t), .other(other),
         .valid_c(valid_c), .valid_t(valid_t), .data_c(data_c), .data_t(data_t),
         .ctl_c(ctl_c), .ctl_t(ctl_t));
@@ -54,6 +58,7 @@ module tb_i2c_ind;
         unwritten = $random(seed);
         addr_c = $random(seed);
         addr_t = {$random(seed)} % 128;
+        addr_w = {$random(seed)} % 128;
         other = $random(seed);
     end
 
@@ -142,6 +147,8 @@ module tb_i2c_ind;
     integer    owed_tn = 0;
     reg [7:0]  owed_c [0:3];     // and the controller
     integer    owed_cn = 0;
+    reg [7:0]  owed_w [0:3];     // and the witness: every byte, whoever it is for
+    integer    owed_wn = 0, logged = 0;
 
     task fail(input [8*72-1:0] what);
         begin
@@ -168,7 +175,7 @@ module tb_i2c_ind;
                 junk = junk + 1;
             end else begin
                 // The target's address three times in four.
-                push_c(0, {({$random(seed)} % 4 != 0) ? addr_t[6:0] : $random(seed),
+                push_c(0, {({$random(seed)} % 4 != 0) ? addr_t[6:0] : ({$random(seed)} % 2) ? addr_w[6:0] : $random(seed),
                            kind >= 5});
                 n = {$random(seed)} % 4;
                 if (kind >= 5) begin             // a read: an acknowledge per byte
@@ -180,7 +187,7 @@ module tb_i2c_ind;
                         0: push_c(1, $random(seed));     // STOP
                         1: begin                         // RESTART, then more
                                push_c(2, $random(seed));
-                               push_c(0, {({$random(seed)} % 4 != 0) ? addr_t[6:0] : $random(seed), 1'b0});
+                               push_c(0, {({$random(seed)} % 4 != 0) ? addr_t[6:0] : ({$random(seed)} % 2) ? addr_w[6:0] : $random(seed), 1'b0});
                                push_c(0, $random(seed));
                            end
                         default: ;                       // nothing: the queue runs dry
@@ -237,6 +244,8 @@ module tb_i2c_ind;
                 w_b = {w_b[6:0], dut.bus[1]};
                 w_n = w_n + 1;
                 if (w_n == 8) begin
+                    owed_w[owed_wn % 4] = w_b;
+                    owed_wn = owed_wn + 1;
                     if (w_first || !w_read) begin
                         // The controller's byte: the next it loaded to send.
                         if (sent_n == 0) fail("a byte the controller never loaded");
@@ -290,6 +299,14 @@ module tb_i2c_ind;
             if (owed_cn != 0) owed_cn = owed_cn - 1;
         end
         if (dut.seen_c) fail("controller logged as a witness");
+        if (dut.seen_w) begin
+            logged = logged + 1;
+            if (owed_wn == 0 || dut.pdata_w !== owed_w[0]) fail("witness logged a wrong byte");
+            for (i = 0; i < 3; i = i + 1) owed_w[i] = owed_w[i + 1];
+            if (owed_wn != 0) owed_wn = owed_wn - 1;
+        end
+        if (owed_wn > 1) fail("witness did not log a byte");
+        {valid_w, data_w, ctl_w} = $random(seed);
 
         // A new transaction when the controller has run dry, after a pause.
         if (quiet_c != 0) quiet_c = quiet_c - 1;
@@ -310,6 +327,7 @@ module tb_i2c_ind;
         if (bytes >= want_bytes || ticks >= max_ticks) begin
             $display("TIMES half %0d low %0d high %0d setup %0d hold %0d rs_setup %0d stop_setup %0d start_hold %0d bus_free %0d",
                      half, lo_min, hi_min, su_min, hd_min, sur_min, sus_min, hds_min, buf_min);
+            if (logged < bytes) fail("the witness logged fewer bytes than were sent");
             if (errors == 0 && bytes != 0)
                 $display("OK half %0d start %0d bytes %0d transactions %0d writes %0d reads %0d nacks %0d restarts %0d junk %0d ticks %0d",
                          half, start, bytes, txns, writes, reads, nacked, restarts, junk, ticks);
