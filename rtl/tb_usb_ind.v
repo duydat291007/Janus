@@ -16,6 +16,7 @@
 //
 // Run by sim_usb.sh. +bit=N is the bit time, +seed=N the random seed,
 // +trans=N and +ticks=N end the run, +trace=N prints the first N ticks.
+// +nodev leaves the device out: hart b is a second witness.
 // +noise drives the queue at random every tick instead. +race holds each
 // packet back so that it starts on the tick the device's hold trap fires.
 // A failed assertion prints "ERROR:", a scoreboard failure "MISMATCH".
@@ -31,7 +32,11 @@ module tb_usb_ind;
     reg [5:0]  start;
     reg [31:0] unwritten;
     reg [1:0]  other;
-    reg [1:0]  pend_m;               // what the noise mode drives
+    reg [1:0]  valid_o = 0;          // what the device and the witness find queued
+    reg [15:0] data_o = 0;
+    reg [3:0]  ctl_o = 0;
+    integer    logged = 0, missed = 0;
+    reg        nodev;                // no device: hart b is a second witness
 
     // Hart a's queue as the chip presents it: the head stays until taken.
     reg [7:0]  q [0:63];
@@ -46,7 +51,8 @@ module tb_usb_ind;
     wire [1:0] ctl_a = noise ? n_ctl : qk[0];
 
     usb_ind dut (.clk(clk), .BIT(BIT), .start(start), .unwritten(unwritten),
-        .other(other), .valid_a(valid_a), .data_a(data_a), .ctl_a(ctl_a));
+        .other(other), .valid_a(valid_a), .data_a(data_a), .ctl_a(ctl_a),
+        .valid_o(valid_o), .data_o(data_o), .ctl_o(ctl_o), .nodev(nodev));
 
     initial begin
         if (!$value$plusargs("seed=%d", seed)) seed = 1;
@@ -56,6 +62,7 @@ module tb_usb_ind;
         if (!$value$plusargs("trace=%d", trace)) trace = 0;
         noise = $test$plusargs("noise");
         race = $test$plusargs("race");
+        nodev = $test$plusargs("nodev");
         BIT = bit_t;
         start = {$random(seed)} % 17;
         unwritten = $random(seed);
@@ -149,6 +156,14 @@ module tb_usb_ind;
         #1;
         ticks = ticks + 1;
         other = $random(seed);
+        valid_o = $random(seed);
+        data_o = $random(seed);
+        ctl_o = $random(seed);
+        // The witness's log, checked against what the receivers store.
+        if (dut.seen_c) begin
+            logged = logged + 1;
+            if (dut.pdata_c !== (dut.push_a ? dut.pdata_a : dut.pdata_b)) fail("the witness logged a wrong byte");
+        end
         if (dut.pop_a && !noise) begin
             if (nq == 0) fail("hart a took from an empty queue");
             else begin
@@ -159,7 +174,7 @@ module tb_usb_ind;
                 nq = nq - 1;
             end
         end
-        if (dut.push_b) begin
+        if (dut.st_b) begin
             bytes = bytes + 1;
             if (crc_left != 0 && next_b == ntook) crc_left = crc_left - 1;
             else if (next_b >= ntook) fail("hart b stored a byte never sent");
@@ -172,6 +187,8 @@ module tb_usb_ind;
             acks = acks + 1;
             if (dut.pdata_a !== 8'hD2) fail("hart a stored something other than ACK");
         end
+        // A handshake that did not come: 18 bit times of J after a good data packet.
+        if (!dut.rst && dut.m_st == 0 && dut.m_due && dut.m_jr == dut.tmo_t) missed = missed + 1;
         if (dut.m_eop_end && !dut.m_dev) packets = packets + 1;
         if (!dut.rst && dut.m_sop && !dut.low_b && dut.held_nx == dut.tmo_t) races = races + 1;
         if (dut.m_eop_end && !dut.m_dev && dut.m_data) begin
@@ -210,9 +227,13 @@ module tb_usb_ind;
         end
 
         if (trans >= want_trans || ticks >= max_ticks) begin
+            // All but the last, whose answer may still be due.
+            if (trans - acks - missed - bad != 0 && trans - acks - missed - bad != 1) fail("a data packet is unaccounted for");
+            if (nodev ? acks != 0 : missed != 0) fail("handshakes");
+            if (logged != bytes + acks) fail("the witness's log is not what was stored");
             if (errors == 0)
-                $display("OK bit %0d transactions %0d packets %0d answered %0d bad %0d late %0d stored %0d ticks %0d races %0d",
-                         bit_t, trans, packets, acks, bad, late, bytes, ticks, races);
+                $display("OK bit %0d transactions %0d packets %0d answered %0d bad %0d late %0d stored %0d ticks %0d races %0d missed %0d",
+                         bit_t, trans, packets, acks, bad, late, bytes, ticks, races, missed);
             $finish;
         end
     end

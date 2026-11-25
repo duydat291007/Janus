@@ -1,8 +1,9 @@
 // Unbounded proof by k-induction of the sixth complete protocol: the
 // low-speed USB program from protocols.py, word for word as the assembler
-// emits it, on two real harts. Hart a is the host (role 0) and has a queue;
+// emits it, on three real harts. Hart a is the host (role 0) and has a queue;
 // hart b is the device (role 1), whose only byte to send, the ACK, is in the
-// program.
+// program; hart c is a witness (role 3), which drives nothing and logs. Or no
+// device is there, and hart b is a second witness.
 //
 // It covers what no other proof reaches: a complementary pin pair, NRZI
 // coding, stuffing of ones only, a CRC that restarts at all ones and is sent
@@ -16,13 +17,15 @@
 //   start       the address the program is loaded at, 0 to 16
 //   valid, data, ctl  hart a's queue: any entries, arriving, changing or
 //                     leaving at any time
+//   nodev       whether a device is there
+//   valid_o, data_o, ctl_o  what the device and the witness find in their
+//                     queues, on every tick
 //   unwritten   what the other 16 program words hold
 //   other       the two pins the program does not use
 //
 // Assumed:
-//   - both harts leave reset on the same tick, with the program's hold trap
+//   - the harts leave reset on the same tick, with the program's hold trap
 //     set, no prescaler and no adversary fault;
-//   - hart b's queue is empty;
 //   - DP and DM are push-pull with the USB pull resistors: undriven, DP reads
 //     0 and DM 1 (J).
 //
@@ -31,7 +34,8 @@
 // a tick.
 `ifdef USB_SIM
 module usb_ind (input clk, input [10:0] BIT, input [5:0] start, input [31:0] unwritten,
-                input [1:0] other, input valid_a, input [7:0] data_a, input [1:0] ctl_a);
+                input [1:0] other, input valid_a, input [7:0] data_a, input [1:0] ctl_a,
+                input [1:0] valid_o, input [15:0] data_o, input [3:0] ctl_o, input nodev);
     parameter MINBIT = 11;
 
     `include "usb_rom.vh"
@@ -44,10 +48,14 @@ module usb_ind (input clk);
     (* anyconst *) wire [10:0] BIT;
     (* anyconst *) wire [5:0]  start;
     (* anyconst *) wire [31:0] unwritten;
+    (* anyconst *) wire        nodev;
     (* anyseq *)   wire [1:0]  other;
     (* anyseq *)   wire        valid_a;
     (* anyseq *)   wire [7:0]  data_a;
     (* anyseq *)   wire [1:0]  ctl_a;
+    (* anyseq *)   wire [1:0]  valid_o;
+    (* anyseq *)   wire [15:0] data_o;
+    (* anyseq *)   wire [3:0]  ctl_o;
 `endif
 
     // Reset: one tick of power-on reset, then two in which the host writes
@@ -76,17 +84,29 @@ module usb_ind (input clk);
     wire        lost_a, lost_b;
     wire [4:0]  width_a, width_b;
     wire [11:0] lf_a, lf_b;
+    wire [7:0]  oe_c, ov_c, count_c, rx_c, pin_c, s1_c, armed_c, tx_c, viol_c, vout_c, pdata_c;
+    wire [87:0] code_c;
+    wire [111:0] cfg_c;
+    wire [47:0] cset_c;
+    wire [31:0] held_c;
+    wire [5:0]  pc_c;
+    wire [3:0]  s_c, k_c, keep_c, prev_c;
+    wire [4:0]  partial_c, width_c;
+    wire [11:0] now_c, edge_c, lf_c;
+    wire [1:0]  role_c, src_c;
+    wire        last_c, mine_c, val_c, insd_c, sbit_c, pop_c, clear_c, push_c, seen_c, seen2_c, lost_c;
 
     // DP (pin 0) and DM (pin 1) are push-pull. Undriven, the pull resistors
-    // hold the line in J: DP 0, DM 1. Two drivers never meet (a claim below),
-    // so which one wins does not matter.
+    // hold the line in J: DP 0, DM 1. Two drivers never meet and the witness
+    // never drives (claims below), so which one wins does not matter.
     wire        dp = oe_a[0] ? ov_a[0] : oe_b[0] ? ov_b[0] : 1'b0;
     wire        dm = oe_a[1] ? ov_a[1] : oe_b[1] ? ov_b[1] : 1'b1;
     wire [7:0]  bus = {4'hF, other, dm, dp};
 
-    wire [5:0]  at_a = pc_a - start, at_b = pc_b - start;
+    wire [5:0]  at_a = pc_a - start, at_b = pc_b - start, at_c = pc_c - start;
     wire [31:0] ins_a = usb_word(at_a, BIT, start, unwritten);
     wire [31:0] ins_b = usb_word(at_b, BIT, start, unwritten);
+    wire [31:0] ins_c = usb_word(at_c, BIT, start, unwritten);
 
     janus_hart a (.clk(clk), .por(por), .rst(rst), .wire_in(bus), .oe(oe_a), .ov(ov_a),
         .od_mask(8'h00), .base_role(2'd0), .reset_pc(start), .addr_reg(8'd0), .pc(pc_a),
@@ -104,8 +124,8 @@ module usb_ind (input clk);
         .dbg_clean());
 
     janus_hart b (.clk(clk), .por(por), .rst(rst), .wire_in(bus), .oe(oe_b), .ov(ov_b),
-        .od_mask(8'h00), .base_role(2'd1), .reset_pc(start), .addr_reg(8'd0), .pc(pc_b),
-        .pc_sel(), .ins(ins_b), .tx_valid(1'b0), .tx_ctl(2'd0), .tx_data(8'd0),
+        .od_mask(8'h00), .base_role(nodev ? 2'd3 : 2'd1), .reset_pc(start), .addr_reg(8'd0), .pc(pc_b),
+        .pc_sel(), .ins(ins_b), .tx_valid(valid_o[0]), .tx_ctl(ctl_o[1:0]), .tx_data(data_o[7:0]),
         .tx_pop(pop_b), .tx_clear(clear_b), .rx_push(push_b), .seen_push(seen_b),
         .seen_push2(seen2_b), .push_data(pdata_b), .push_data2(), .violations(vout_b),
         .arb_lost(lost_b), .cfg_we(cfg_we), .cfg_addr(cfg_addr), .cfg_data(cfg_data),
@@ -116,6 +136,21 @@ module usb_ind (input clk);
         .dbg_code(code_b), .dbg_inserted(insd_b), .dbg_stuff_bit(sbit_b), .dbg_width(width_b),
         .dbg_viol(viol_b), .dbg_tx(tx_b), .dbg_cfg(cfg_b), .dbg_cset(cset_b),
         .dbg_cnt(), .dbg_rx1(), .dbg_prev(prev_b), .dbg_held(held_b), .dbg_keep(keep_b), .dbg_last_fall(lf_b),
+        .dbg_clean());
+
+    janus_hart c (.clk(clk), .por(por), .rst(rst), .wire_in(bus), .oe(oe_c), .ov(ov_c),
+        .od_mask(8'h00), .base_role(2'd3), .reset_pc(start), .addr_reg(8'd0), .pc(pc_c),
+        .pc_sel(), .ins(ins_c), .tx_valid(valid_o[1]), .tx_ctl(ctl_o[3:2]), .tx_data(data_o[15:8]),
+        .tx_pop(pop_c), .tx_clear(clear_c), .rx_push(push_c), .seen_push(seen_c),
+        .seen_push2(seen2_c), .push_data(pdata_c), .push_data2(), .violations(vout_c),
+        .arb_lost(lost_c), .cfg_we(cfg_we), .cfg_addr(cfg_addr), .cfg_data(cfg_data),
+        .dbg_s(s_c), .dbg_count(count_c), .dbg_rx(rx_c), .dbg_last(last_c),
+        .dbg_now(now_c), .dbg_edge(edge_c), .dbg_dwell(), .dbg_k(k_c),
+        .dbg_partial(partial_c), .dbg_role(role_c), .dbg_src(src_c), .dbg_mine(mine_c),
+        .dbg_val(val_c), .dbg_pin(pin_c), .dbg_s1(s1_c), .dbg_armed(armed_c),
+        .dbg_code(code_c), .dbg_inserted(insd_c), .dbg_stuff_bit(sbit_c), .dbg_width(width_c),
+        .dbg_viol(viol_c), .dbg_tx(tx_c), .dbg_cfg(cfg_c), .dbg_cset(cset_c),
+        .dbg_cnt(), .dbg_rx1(), .dbg_prev(prev_c), .dbg_held(held_c), .dbg_keep(keep_c), .dbg_last_fall(lf_c),
         .dbg_clean());
 
     localparam S_BOOT = 4'd0, S_EXEC = 4'd1, S_CLAIM = 4'd2, S_SYNC = 4'd3, S_EDGE = 4'd4,
@@ -161,9 +196,10 @@ module usb_ind (input clk);
     reg  [7:0] m_byte = 0;        // the last byte read
     // The host's packet is a data packet: its PID's first two bits, its two
     // lowest, are both 1 (DATA0, DATA1, DATA2, MDATA). After one, whether the
-    // device's handshake is due; 'bad' counts data packets with a bad CRC16,
-    // which every hart counts as a violation.
-    reg        m_data = 0, m_due = 0, m_fr = 0;
+    // device's handshake is due; 'bad' counts data packets with a bad CRC16
+    // and handshakes that have not come when the line has been J for 18 bit
+    // times, which every hart counts as violations.
+    reg        m_data = 0, m_due = 0, m_fr = 0, m_miss = 0;
     reg  [7:0] m_nbad = 0;
     reg [15:0] m_jr = 0;          // J ticks in a row up to the last, saturating
     reg [15:0] m_it = 0;          // ticks since the last packet ended, saturating
@@ -207,8 +243,13 @@ module usb_ind (input clk);
                     m_bi <= 0;
                     m_nb <= 0;
                     m_dev <= low_b;
+                    m_miss <= 1'b0;
                     m_fr <= 1'b1;
                     if (!low_b) m_data <= 1'b0;
+                end else if (m_due && m_jr == tmo_t) begin
+                    m_due <= 1'b0;
+                    m_miss <= 1'b1;
+                    if (m_nbad != 8'hFF) m_nbad <= m_nbad + 1'b1;
                 end
             end else begin
                 m_t <= m_end ? 11'd0 : m_t + 1'b1;
@@ -262,11 +303,12 @@ module usb_ind (input clk);
     // and decide on it within a few ticks, well before the bit ends. The
     // device stores each byte it reads; the host stores the ACK.
     reg        m_pend = 0;        // a byte read and not yet stored
+    wire       st_b = nodev ? seen_b : push_b;    // hart b takes a byte, storing or logging it
     always @(posedge clk) begin
         if (m_sample && m_bdone) m_byte <= m_bytev;
         if (rst) m_pend <= 0;
         else if (m_sample && m_bdone) m_pend <= 1'b1;
-        else if (push_a || push_b) m_pend <= 1'b0;
+        else if (push_a || st_b) m_pend <= 1'b0;
         if (rst || m_eop_end) m_nc <= 0;
         else if (m_sample && m_bdone && m_ph == 2'd2 && g_rst && m_nc != 2'd3) m_nc <= m_nc + 1'b1;
     end
@@ -287,9 +329,10 @@ module usb_ind (input clk);
     // Each hart has run `stuff`: its coder is on from then on.
     // (The hold trap can fire on the tick a host would run it: it has run once
     // the hart is past it.)
-    reg        g_sta0 = 0, g_stb0 = 0;
+    reg        g_sta0 = 0, g_stb0 = 0, g_stc0 = 0;
     wire       g_sta = g_sta0 || (at_a > PC_STUFF && at_a < PC_END);
     wire       g_stb = g_stb0 || (at_b > PC_STUFF && at_b < PC_END);
+    wire       g_stc = g_stc0 || (at_c > PC_STUFF && at_c < PC_END);
     // The coder (CRC, run, run valid, run value) with one more bit.
     function automatic [21:0] cod_step(input [21:0] c, input x);
         cod_step = {{c[20:6], 1'b0} ^ ((x ^ c[21]) ? 16'h8005 : 16'h0),
@@ -313,7 +356,9 @@ module usb_ind (input clk);
     // Between packets, once both bits of J have been read.
     wire [21:0] gap_cod = m_dev ? ack_code(5'd18)
                           : cod_step(cod_step({m_crc, g_rl, g_rval, g_rval && g_rv}, 1'b0), 1'b1);
-    wire [23:0] gap_code = (!m_fr && at_a <= PC_WIDTH0) ? 24'd0 : !m_fr ? {16'hFFFF, 8'h00} : {gap_cod, 2'b00};
+    wire [15:0] m_rt = m_it - tmo_t - 16'd1;      // after a missing handshake, ticks since the trap
+    // (A missing handshake's `lost` restarts the CRC.)
+    wire [23:0] gap_code = (m_miss && m_rt >= 16'd2) ? {16'hFFFF, gap_cod[5:0], 2'b00} : (!m_fr && at_a <= PC_WIDTH0) ? 24'd0 : !m_fr ? {16'hFFFF, 8'h00} : {gap_cod, 2'b00};
     wire       c_data = m_st == M_PKT && m_end && m_s != L_SE0 && !m_dev;   // the coder takes a bit
     always @(posedge clk) begin
         if (rst) begin
@@ -335,7 +380,7 @@ module usb_ind (input clk);
             end
         end
         if (!rst && m_sop) f_code <= gap_code;
-        {g_sta0, g_stb0} <= rst ? 2'b00 : {g_sta, g_stb};
+        {g_sta0, g_stb0, g_stc0} <= rst ? 3'b000 : {g_sta, g_stb, g_stc};
     end
 
     // Whether the byte in hand is the chip's CRC16: the host's choice is made
@@ -467,7 +512,7 @@ module usb_ind (input clk);
         .scrc(snd_a ? g_scrc : o_scrc), .lvl(snd_a ? m_lvl : o_lvl), .line(snd_a ? ln : m_p2),
         .rl(snd_a ? g_rl : o_rl), .rval(snd_a ? g_rval : o_rval), .rv(snd_a ? g_rv : o_rv),
         .nc(snd_a ? m_nc : o_nc), .nb(snd_a ? m_nb : o_nb), .crcb(snd_a ? m_crcb : o_crcb), .tc(snd_a ? m_tc : o_tc), .data(m_data), .late(m_late),
-        .fcode(f_code), .gtk(g_tk), .lfv(cset_a[13]), .lf_age(f_age),
+        .wit(1'b0), .fcode(f_code), .gtk(g_tk), .lfv(cset_a[13]), .lf_age(f_age),
         .at(at_a), .s(s_a), .k(k_a), .code(code_a[23:0]), .rx(rx_a), .now(now_a), .edge_t(edge_a),
         .mine(mine_a), .val(val_a), .src(src_a), .oe(oe_a[1:0]), .ov(ov_a[1:0]), .armed(armed_a[1:0]),
         .ins(ins_a));
@@ -477,10 +522,19 @@ module usb_ind (input clk);
         .scrc(snd_b ? g_scrc : o_scrc), .lvl(snd_b ? m_lvl : o_lvl), .line(snd_b ? ln : m_p2),
         .rl(snd_b ? g_rl : o_rl), .rval(snd_b ? g_rval : o_rval), .rv(snd_b ? g_rv : o_rv),
         .nc(snd_b ? m_nc : o_nc), .nb(snd_b ? m_nb : o_nb), .crcb(snd_b ? m_crcb : o_crcb), .tc(snd_b ? m_tc : o_tc), .data(m_data), .late(m_late),
-        .fcode(f_code), .gtk(g_tk), .lfv(cset_b[13]), .lf_age(f_age),
+        .wit(1'b0), .fcode(f_code), .gtk(g_tk), .lfv(cset_b[13]), .lf_age(f_age),
         .at(at_b), .s(s_b), .k(k_b), .code(code_b[23:0]), .rx(rx_b), .now(now_b), .edge_t(edge_b),
         .mine(mine_b), .val(val_b), .src(src_b), .oe(oe_b[1:0]), .ov(ov_b[1:0]), .armed(armed_b[1:0]),
         .ins(ins_b));
+
+    usb_view vc (.clk_v(clk), .en(!rst && o_in), .snd(1'b0), .dev(m_dev), .who(1'b1), .BIT(BIT),
+        .st(o_st), .t(o_t), .ph(o_ph), .bi(o_bi), .run(o_run), .sh(o_sh), .crc(o_crc), .scrc(o_scrc),
+        .lvl(o_lvl), .line(m_p2), .rl(o_rl), .rval(o_rval), .rv(o_rv), .nc(o_nc), .nb(o_nb),
+        .crcb(o_crcb), .tc(o_tc), .data(m_data), .late(m_late),
+        .wit(1'b1), .fcode(f_code), .gtk(g_tk), .lfv(cset_c[13]), .lf_age(f_age),
+        .at(at_c), .s(s_c), .k(k_c), .code(code_c[23:0]), .rx(rx_c), .now(now_c), .edge_t(edge_c),
+        .mine(mine_c), .val(val_c), .src(src_c), .oe(oe_c[1:0]), .ov(ov_c[1:0]), .armed(armed_c[1:0]),
+        .ins(ins_c));
 
     // ---- Where the harts stand ----
     localparam S_FETCH = 4'd15;
@@ -490,8 +544,10 @@ module usb_ind (input clk);
     wire        a_edge = s_a == S_EDGE, a_mid = s_a == S_MID;
     wire        b_exec = s_b == S_EXEC, b_claim = s_b == S_CLAIM, b_sync = s_b == S_SYNC;
     wire        b_edge = s_b == S_EDGE, b_mid = s_b == S_MID;
+    wire        c_exec = s_c == S_EXEC, c_claim = s_c == S_CLAIM, c_sync = s_c == S_SYNC;
+    wire        c_edge = s_c == S_EDGE, c_mid = s_c == S_MID;
     wire [11:0] since_a = now_a - edge_a, ahead_a = edge_a - now_a;
-    wire [11:0] since_b = now_b - edge_b, ahead_b = edge_b - now_b;
+    wire [11:0] since_b = now_b - edge_b, ahead_b = edge_b - now_b, ahead_c = edge_c - now_c;
     // Whether a hart of role r owns a bit of party p, as the hart decides it.
     function automatic mine_of(input [1:0] p, input [1:0] r);
         mine_of = p == 2'd2 ? r != 2'd3 : r == p;
@@ -540,12 +596,14 @@ module usb_ind (input clk);
     // the CRC16 taken so far.
     wire [1:0]  c_nc = (m_bi == 3'd7 && !m_stuff && tq > h) ? m_nc - 1'b1 : m_nc;
     wire [4:0]  kc = {c_nc, 3'b000} + {2'b00, m_bi};
+    wire [1:0]  rl_b = nodev ? 2'd3 : 2'd1;
     // ---- Between packets: what the last packet was ----
     wire        g0 = !m_fr;                                   // none since reset
     wire        gap = m_st == M_IDLE && m_fr;
     wire        g1 = gap && !m_dev && !m_data;                // a host packet, not a data packet
     wire        g2 = gap && !m_dev && m_data && m_due;        // a data packet with a good CRC16
-    wire        g3 = gap && !m_dev && m_data && !m_due;       // one with a bad CRC16
+    wire        g3 = gap && !m_dev && m_data && !m_due && !m_miss;    // one with a bad CRC16
+    wire        g5 = gap && !m_dev && m_miss;                 // a good one whose handshake has not come
     wire        g4 = gap && m_dev;                            // the handshake
     wire [15:0] it = m_it, hh = {4'd0, h}, dw = {4'd0, d};
     // Each hart reads the packet's last J bit, the second after its end of
@@ -555,6 +613,10 @@ module usb_ind (input clk);
     wire [15:0] base_a = g4 ? dw + hh + 16'd2 : dw + hh, base_b = g4 ? dw + hh : dw + hh + 16'd2;
     wire        rd_a = g0 || it >= base_a, rd_b = g0 || it >= base_b;
     wire [15:0] q_a = it - base_a, q_b = it - base_b;
+    // The witness is two ticks behind every packet's sender, and behind the
+    // host's J after the handshake no more than that.
+    wire [15:0] base_c = dw + hh + 16'd2, q_c = it - base_c;
+    wire        rd_c = g0 || it >= base_c;
     // The hold trap fires once DM has been high for 18 bit times; with no
     // handshake due, each hart claims again on the next tick.
     wire        fired = held_v >= tmo_t;
@@ -562,6 +624,7 @@ module usb_ind (input clk);
     // (A hart that pulls DM low itself does not count it as held: on a host
     // packet's second tick only the device's trap can fire.)
     wire        tr_a = fired && r_tr == 0 && !low_a1, tr_b = fired && r_tr == 0 && !low_b1;
+    wire        tr_c = fired && r_tr == 0;
     // The instructions each hart runs after that read, one a tick. All but a
     // good data packet end with `end`: both pins let go, the counter to 0.
     function automatic [5:0] rel_at(input [15:0] q);
@@ -573,34 +636,47 @@ module usb_ind (input clk);
             3'd2: seq_at = q == 0 ? PC_NODATA : q == 16'd1 ? PC_CRCBAD : q == 16'd2 ? PC_ALOAD : PC_ASYNC0;
             3'd3: seq_at = q == 0 ? PC_NODATA : q == 16'd1 ? PC_CRCBAD : rel_at(q - 16'd2);
             3'd4: seq_at = rel_at(q);
+            // The hold trap, with a handshake due: `lost` counts a violation.
+            3'd5: seq_at = q == 0 ? PC_TMO : q == 16'd1 ? PC_LWIDTH : q == 16'd2 ? PC_LBAD : rel_at(q - 16'd3);
             default: seq_at = at0;      // from reset: the mode words, then the claim
         endcase
     endfunction
-    wire [2:0]  gsel = g1 ? 3'd1 : g2 ? 3'd2 : g3 ? 3'd3 : g4 ? 3'd4 : 3'd0;
-    wire [15:0] sq_len = g1 ? 16'd5 : g2 ? 16'hFFFF : g3 ? 16'd6 : g4 ? 16'd4 : 16'd0;
-    wire        sq_a = g0 ? at_a < PC_CLAIM : q_a < sq_len;
-    wire        sq_b = g0 ? at_b < PC_CLAIM : q_b < sq_len;
+    wire [2:0]  gsel = g1 ? 3'd1 : g2 ? 3'd2 : g3 ? 3'd3 : g4 ? 3'd4 : g5 ? 3'd5 : 3'd0;
+    wire [15:0] sq_len = g1 ? 16'd5 : g2 ? 16'hFFFF : g3 ? 16'd6 : g4 ? 16'd4 : g5 ? 16'd7 : 16'd0;
+    wire [15:0] qs_a = g5 ? r_tr : q_a, qs_b = g5 ? r_tr : q_b, qs_c = g5 ? r_tr : q_c;
+    wire        sq_a = g0 ? at_a < PC_CLAIM : qs_a < sq_len;
+    wire        sq_b = g0 ? at_b < PC_CLAIM : qs_b < sq_len;
+    wire        sq_c = g0 ? at_c < PC_CLAIM : qs_c < sq_len;
     // Each hart's next edge: a bit after the J it read, unless the hold trap
     // has fired since, or none has been read since reset.
     wire [15:0] e_a = g4 ? dw + dw + 16'd2 : dw + dw, e_b = g4 ? dw + dw : dw + dw + 16'd2;
     wire [11:0] ah_a = (g0 || fired || it >= e_a) ? 12'd0 : e_a[11:0] - it[11:0];
     wire [11:0] ah_b = (g0 || fired || it >= e_b) ? 12'd0 : e_b[11:0] - it[11:0];
+    wire [15:0] e_c = dw + dw + 16'd2;
+    wire [11:0] ah_c = (g0 || fired || it >= e_c) ? 12'd0 : e_c[11:0] - it[11:0];
     // In the run: the instruction due, executing, except while the handshake
     // waits: the host for the device's SYNC, the device for its edge.
-    wire        hs_wait_a = g2 && q_a >= 16'd4, hs_wait_b = g2 && q_b >= 16'd4;
+    wire        hs_wait_a = g2 && q_a >= 16'd4, hs_wait_b = g2 && q_b >= 16'd4, hs_wait_c = g2 && q_c >= 16'd4;
     // From reset both run the mode words in step, one a tick, with their
     // edges at `now`.
     wire        boot_ok_a = ((s_a == S_BOOT && at_a == 0 && now_a == 0) || (a_exec && now_a == {6'd0, at_a} + 12'd1))
-                            && at_a == at_b && s_a == s_b && ahead_a == 0 && ahead_b == 0 && it == {4'd0, now_a};
+                            && at_a == at_b && s_a == s_b && at_a == at_c && s_a == s_c
+                            && ahead_a == 0 && ahead_b == 0 && ahead_c == 0 && it == {4'd0, now_a};
     wire        boot_ok_b = boot_ok_a;
     wire        sq_ok_a = g0 ? boot_ok_a && at_a == at_b && s_a == s_b
                           : hs_wait_a ? (a_sync && at_a == PC_ASYNC0 && k_a == 0 && !mine_a && !val_a && src_a == 2'b10
                                          && ahead_a == ah_a)
-                          : (a_exec && at_a == seq_at(gsel, q_a, at_a));
+                          : (a_exec && at_a == seq_at(gsel, qs_a, at_a));
     wire        sq_ok_b = g0 ? boot_ok_b
+                          : (hs_wait_b && nodev) ? (b_sync && at_b == PC_ASYNC0 && k_b == 0 && !mine_b && !val_b && src_b == 2'b10
+                                         && ahead_b == ah_b)
                           : hs_wait_b ? (b_edge && at_b == PC_ASYNC0 && k_b == 0 && mine_b && !val_b && src_b == 2'b10
                                          && ahead_b == ah_b && ah_b != 0)
-                          : (b_exec && at_b == seq_at(gsel, q_b, at_b));
+                          : (b_exec && at_b == seq_at(gsel, qs_b, at_b));
+    wire        sq_ok_c = g0 ? boot_ok_a
+                          : hs_wait_c ? (c_sync && at_c == PC_ASYNC0 && k_c == 0 && !mine_c && !val_c && src_c == 2'b10
+                                         && ahead_c == ah_c)
+                          : (c_exec && at_c == seq_at(gsel, qs_c, at_c));
     // Claiming: the host may pass its claim at any tick it has something
     // queued, run `stuff`, and wait at SYNC's first bit for its edge; the
     // device waits for the line to fall.
@@ -608,11 +684,12 @@ module usb_ind (input clk);
                        || (at_a == PC_SYNC0 && (a_exec || (a_edge && ahead_a != 0 && k_a == 0 && mine_a
                                                            && !val_a && src_a == 2'b10)));
     wire        cf_b = at_b == PC_CLAIM && (b_claim || b_exec);
+    wire        cf_c = at_c == PC_CLAIM && (c_claim || c_exec);
     // The host's drive after it reads the last J: J until `end` lets go, DM
     // and a tick later DP, or until its edge when a handshake is due; none
     // from reset until its first packet.
     wire [15:0] rel_a = g1 ? 16'd1 : g3 ? 16'd2 : 16'd0;        // when it runs `end`
-    wire [1:0]  oe_ea = g0 ? 2'b00 : g2 ? (it < dw + dw ? 2'b11 : 2'b00)
+    wire [1:0]  oe_ea = (g0 || g5) ? 2'b00 : g2 ? (it < dw + dw ? 2'b11 : 2'b00)
                         : q_a <= rel_a ? 2'b11 : q_a == rel_a + 16'd1 ? 2'b01 : 2'b00;
     // The count: 1 from a data packet's PID until `end`, else 0.
     function automatic [7:0] cnt_of(input [2:0] g, input [15:0] q);
@@ -620,18 +697,22 @@ module usb_ind (input clk);
             3'd2: cnt_of = 8'd1;
             3'd3: cnt_of = q >= 16'd5 ? 8'd0 : 8'd1;
             3'd4: cnt_of = q >= 16'd3 ? 8'd0 : 8'd1;
+            3'd5: cnt_of = q >= 16'd6 ? 8'd0 : 8'd1;
             default: cnt_of = 8'd0;
         endcase
     endfunction
-    wire [7:0]  cnt_ea = cnt_of(gsel, q_a), cnt_eb = cnt_of(gsel, q_b);
+    wire [7:0]  cnt_ea = cnt_of(gsel, qs_a), cnt_eb = cnt_of(gsel, qs_b), cnt_ec = cnt_of(gsel, qs_c);
     // A byte's store is due: the monitor has read its last bit, and its
     // listener has yet to read that bit (or the stuffed bit after it), or is
     // about to store it, or stores it now.
     wire        mr7 = (m_bi == 3'd7 && !m_stuff && tq > h) || (m_bi == 0 && m_stuff && m_ph == 2'd2);
     wire        st_due_b = (((at_b == PC_PID6 && k_b == 4'd5) || (at_b == PC_BYTE && k_b == 4'd7)) && (b_mid || b_edge) && mr7)
-                           || ((at_b == PC_WIDTH || at_b == PC_BJUMP || at_b == PC_STORE) && b_exec) || push_b;
+                           || ((at_b == PC_WIDTH || at_b == PC_BJUMP || at_b == PC_STORE) && b_exec) || st_b;
     wire        st_due_a = (at_a == PC_APID && k_a == 4'd7 && (a_mid || a_edge) && mr7)
                            || (at_a == PC_ASTORE && a_exec) || push_a;
+    wire        st_due_c = (((at_c == PC_PID6 && k_c == 4'd5) || ((at_c == PC_BYTE || at_c == PC_APID) && k_c == 4'd7))
+                            && (c_mid || c_edge) && mr7)
+                           || ((at_c == PC_WIDTH || at_c == PC_BJUMP || at_c == PC_STORE || at_c == PC_ASTORE) && c_exec) || seen_c;
 
 `ifdef USB_SIM
     always @(negedge clk) begin                  // once a tick, with everything settled
@@ -644,11 +725,14 @@ module usb_ind (input clk);
         assert (step <= 2'd3);
         if (!rst) begin
             // ---- CLAIMS ----
-            // Neither hart ever loses a role, steps aside or takes as a witness,
-            // and the device never takes from its queue.
-            assert (role_a == 2'd0 && role_b == 2'd1);
+            // No hart ever loses a role or steps aside, neither the host nor the
+            // device takes as a witness, and the device and the witness never take
+            // from their queues. The witness never drives a pin.
+            assert (role_a == 2'd0 && role_b == rl_b && role_c == 2'd3);
+            assert (!lost_c && !clear_c && !pop_c && !push_c && !seen2_c);
+            assert (oe_c == 0);
             assert (!lost_a && !lost_b && !clear_a && !clear_b);
-            assert (!seen_a && !seen_b && !seen2_a && !seen2_b && !pop_b);
+            assert (!seen_a && (nodev ? !push_b && oe_b == 0 : !seen_b) && !seen2_a && !seen2_b && !pop_b);
             assert (oe_a[7:2] == 0 && oe_b[7:2] == 0);
             // Two drivers never meet on a pin, and the line is never SE1.
             assert (!(oe_a[0] && oe_b[0]) && !(oe_a[1] && oe_b[1]));
@@ -695,21 +779,32 @@ module usb_ind (input clk);
             // The device answers each data packet whose CRC16 checks, 2 bit
             // times and 2 ticks after its end of packet, however long after
             // the packet before it came, and at no other time.
-            if (m_sop) assert (low_b == (m_due && m_it == {4'd0, d, 1'b0} + 16'd2));
-            if (m_due && m_st == M_IDLE && m_it == {4'd0, d, 1'b0} + 16'd2) assert (m_sop && low_b);
+            if (m_sop) assert (low_b == (!nodev && m_due && m_it == {4'd0, d, 1'b0} + 16'd2));
+            if (!nodev && m_due && m_st == M_IDLE && m_it == {4'd0, d, 1'b0} + 16'd2) assert (m_sop && low_b);
+            // The host starts no packet while a handshake is due. With a device
+            // there the handshake always comes; with none, the host waits out 18
+            // bit times of J.
+            if (m_sop && m_due) assert (low_b);
+            if (!nodev) assert (!m_miss);
 
             // DATA: the device stores each byte of the host's packets, the host
             // the ACK, as the monitor read them, once each.
-            if (push_b) assert (m_pend && !m_dev && pdata_b == m_byte);
+            if (st_b) assert (m_pend && !m_dev && pdata_b == m_byte);
             if (push_a) assert (m_pend && m_dev && pdata_a == m_byte);
             if (m_sample && m_bdone) assert (!m_pend);
             if (m_sample && m_s == L_SE0) assert (!m_pend);
+            // The witness logs every byte of every packet, on the tick its receiver
+            // stores it, and nothing else.
+            assert (seen_c == (push_a || st_b));
+            if (seen_c) assert (pdata_c == m_byte);
 
             // VIOLATIONS: every hart counts exactly the data packets whose
-            // CRC16 fails, within two bit times of their end.
-            assert (viol_a <= m_nbad && viol_b <= m_nbad && viol_a + 9'd1 >= {1'b0, m_nbad}
-                    && viol_b + 9'd1 >= {1'b0, m_nbad});
-            if (m_st != M_IDLE || m_it >= {4'd0, d, 1'b0}) assert (viol_a == m_nbad && viol_b == m_nbad);
+            // CRC16 fails, within two bit times of their end, and the handshakes
+            // that do not come, 18 bit times and 4 ticks after the packet's end.
+            assert (viol_a <= m_nbad && viol_b <= m_nbad && viol_c <= m_nbad && viol_a + 9'd1 >= {1'b0, m_nbad}
+                    && viol_b + 9'd1 >= {1'b0, m_nbad} && viol_c + 9'd1 >= {1'b0, m_nbad});
+            if (m_st != M_IDLE || (m_it >= {4'd0, d, 1'b0} && !(m_miss && m_it < tmo_t + 16'd4)))
+                assert (viol_a == m_nbad && viol_b == m_nbad && viol_c == m_nbad);
 
             // ==== INVARIANTS ====
 
@@ -777,6 +872,8 @@ module usb_ind (input clk);
             // handshake follows a data packet, whose type the monitor keeps.
             if (m_due) assert (m_data && (m_st != M_IDLE || !m_dev));
             if (m_dev) assert (m_data);
+            if (nodev) assert (!m_dev && !low_b);
+            if (m_miss) assert (nodev && m_st == M_IDLE && m_fr && m_data && !m_due && m_crc == 16'h800D && m_it > tmo_t);
             // Between packets the monitor holds the end of the last, after a
             // whole byte.
             if (m_st == M_IDLE && m_fr) assert (m_ph == 2'd2 && m_bi == 0 && m_run < 3'd6);
@@ -818,23 +915,28 @@ module usb_ind (input clk);
             // holds its power-on 0; the hart moves the next one in before
             // reading it.
             assert (s1_a[1:0] == m_prev && pin_a[1:0] == m_p2 && s1_a == s1_b && pin_a == pin_b
-                    && prev_a == prev_b && prev_a[1:0] == (s_a == S_BOOT ? 2'b00 : m_p3));
-            assert (now_a == now_b);
-            if (s_a == S_BOOT || s_b == S_BOOT)
-                assert (s_a == s_b && at_a == 0 && at_b == 0 && now_a == 0 && held_a == 0 && held_b == 0
-                        && !cset_a[13] && !cset_b[13] && m_st == M_IDLE && !m_fr && m_it == 0);
+                    && prev_a == prev_b && prev_a[1:0] == (s_a == S_BOOT ? 2'b00 : m_p3)
+                    && s1_c == s1_a && pin_c == pin_a && prev_c == prev_a);
+            assert (now_a == now_b && now_a == now_c);
+            if (s_a == S_BOOT || s_b == S_BOOT || s_c == S_BOOT)
+                assert (s_a == s_b && s_a == s_c && at_a == 0 && at_b == 0 && at_c == 0 && now_a == 0
+                        && held_a == 0 && held_b == 0 && held_c == 0
+                        && !cset_a[13] && !cset_b[13] && !cset_c[13] && m_st == M_IDLE && !m_fr && m_it == 0);
 
             // ---- Configuration, as each hart's mode words have set it ----
             assert (cfg_a == {16'd0, 16'd0, usb_hold_ticks(BIT), 16'd0, usb_hold(start), 32'd0}
-                    && cfg_b == cfg_a);
+                    && cfg_b == cfg_a && cfg_c == cfg_a);
             assert (code_a[87:51] == cfg_of(at_a) && code_b[87:51] == cfg_of(at_b));
             assert (code_a[45:24] == cfg2_of(at_a) && code_b[45:24] == cfg2_of(at_b));
+            assert (code_c[87:51] == cfg_of(at_c) && code_c[45:24] == cfg2_of(at_c)
+                    && cset_c == cset_of(at_c, start, cset_c[13]));
             assert (cset_a == cset_of(at_a, start, cset_a[13]) && cset_b == cset_of(at_b, start, cset_b[13]));
             // Stuffing is off until a hart first runs `stuff`, then on for good.
             assert (code_a[50:46] == (g_sta ? 5'h16 : 5'h00) && code_b[50:46] == (g_stb ? 5'h16 : 5'h00));
+            assert (code_c[50:46] == (g_stc ? 5'h16 : 5'h00));
             if (m_fr) assert (g_sta);
-            if (m_fr && !(m_cell0 && tq <= 12'd4)) assert (g_stb);
-            if (!m_fr) assert (!g_stb && (at_a >= PC_CLAIM || !g_sta));
+            if (m_fr && !(m_cell0 && tq <= 12'd4)) assert (g_stb && g_stc);
+            if (!m_fr) assert (!g_stb && !g_stc && (at_a >= PC_CLAIM || !g_sta));
 
             // ---- Where each hart can be ----
             // Only the states of timed bits and claims last past a tick;
@@ -844,15 +946,23 @@ module usb_ind (input clk);
             else assert (a_exec || a_sync || a_edge || a_mid);
             if (ins_b[31:28] != 4'd1) begin assert (s_b == S_BOOT || b_exec || (at_b == PC_CLAIM && b_claim)); end
             else assert (b_exec || b_sync || b_edge || b_mid || s_b == S_FETCH);
-            assert (at_a < PROG_LEN && at_b < PROG_LEN && at_a != PC_LWIDTH && at_a != PC_LBAD
-                    && at_b != PC_LWIDTH && at_b != PC_LBAD);
+            assert (s_c <= S_MID || (s_c == S_FETCH && at_c == PC_EOP2));
+            if (ins_c[31:28] != 4'd1) begin assert (s_c == S_BOOT || c_exec || (at_c == PC_CLAIM && c_claim)); end
+            else assert (c_exec || c_sync || c_edge || c_mid || s_c == S_FETCH);
+            assert (at_c < PROG_LEN && (g5 || (at_c != PC_LWIDTH && at_c != PC_LBAD)));
+            assert (partial_c[0] == ((c_sync || c_edge || c_mid) && k_c != 0));
+            if (c_sync || c_edge || c_mid) assert (!mine_c && k_c <= ins_c[20:17]
+                                       && src_c == (code_c[1] ? {1'b1, code_c[0]} : ins_c[13] ? 2'd2 : ins_c[22:21]));
+            assert (keep_c == 0);
+            assert (at_a < PROG_LEN && at_b < PROG_LEN);
+            if (!g5) assert (at_a != PC_LWIDTH && at_a != PC_LBAD && at_b != PC_LWIDTH && at_b != PC_LBAD);
             // A hart is inside an instruction past its first bit, the flag a
             // trap checks, exactly while it is on a later bit.
             assert (partial_a[0] == ((a_sync || a_edge || a_mid) && k_a != 0)
                     && partial_b[0] == ((b_sync || b_edge || b_mid) && k_b != 0));
             if (a_sync || a_edge || a_mid) assert (mine_a == mine_of(ins_a[24:23], 2'd0) && k_a <= ins_a[20:17]
                                        && src_a == (code_a[1] ? {1'b1, code_a[0]} : ins_a[13] ? 2'd2 : ins_a[22:21]));
-            if (b_sync || b_edge || b_mid) assert (mine_b == mine_of(ins_b[24:23], 2'd1) && k_b <= ins_b[20:17]
+            if (b_sync || b_edge || b_mid) assert (mine_b == mine_of(ins_b[24:23], rl_b) && k_b <= ins_b[20:17]
                                        && src_b == (code_b[1] ? {1'b1, code_b[0]} : ins_b[13] ? 2'd2 : ins_b[22:21]));
             assert (keep_a == 0 && keep_b == 0);
 
@@ -903,12 +1013,20 @@ module usb_ind (input clk);
             // Each hart counts DM high as it sees it, two ticks late, but
             // starts again at once when it pulls DM low itself.
             assert (held_a == {16'd0, low_a1 ? 16'd0 : held_v} && held_b == {16'd0, low_b1 ? 16'd0 : held_v});
+            assert (held_c == {16'd0, held_v});
 
             // ---- Between packets ----
             if (m_st == M_IDLE && !m_sop) begin
                 // Both have read the last bit before this gap: J, as they
                 // still hold it; no instruction is cut off mid-bits.
-                assert (rx_a == m_sh && rx_b == m_sh);
+                assert (rx_a == m_sh && rx_b == m_sh && rx_c == m_sh);
+                if (rd_c) assert (armed_c[1:0] == L_J && !c_mid && !partial_c[0]);
+                if (tr_c) begin assert (c_exec && at_c == PC_TMO && ahead_c == 0); end
+                else if (rd_c && sq_c) assert (sq_ok_c);
+                else if (rd_c) assert (cf_c && ahead_c == ah_c);
+                if (rd_c) begin assert (count_c == cnt_ec); end
+                else assert (count_c == {7'd0, m_data});
+                if (rd_c) assert (code_c[23:0] == gap_code);
                 if (rd_a) assert (armed_a[1:0] == L_J && !a_mid && !partial_a[0]);
                 if (rd_b) assert (armed_b[1:0] == L_J && !b_mid && !partial_b[0]);
                 // The hold trap fires once DM has been high for 18 bit times:
@@ -957,10 +1075,16 @@ module usb_ind (input clk);
                                     : (at_b == PC_CLAIM && b_claim && ahead_b <= 12'd2))
                             && oe_b[1:0] == 0 && armed_b[1:0] == L_J
                             && rx_b == m_sh && code_b[23:0] == f_code && count_b == 0);
+                    assert ((m_late ? (at_c == PC_TMO && c_exec && ahead_c == 0 && held_c[15:0] == tmo_t)
+                                    : (at_c == PC_CLAIM && c_claim && ahead_c <= 12'd2))
+                            && armed_c[1:0] == L_J && rx_c == m_sh && code_c[23:0] == f_code && count_c == 0);
                 end else begin
                     assert (at_a == PC_ASYNC0 && a_sync && k_a == 0 && !mine_a && !val_a && src_a == 2'b10
                             && ahead_a == 0 && oe_a[1:0] == 0 && armed_a[1:0] == L_J && rx_a == m_sh
                             && code_a[23:0] == f_code && count_a == 8'd1);
+                    assert (at_c == PC_ASYNC0 && c_sync && k_c == 0 && !mine_c && !val_c && src_c == 2'b10
+                            && ahead_c == 0 && armed_c[1:0] == L_J && rx_c == m_sh
+                            && code_c[23:0] == f_code && count_c == 8'd1);
                 end
             end
             if (m_late) assert (m_st != M_IDLE && !m_dev);
@@ -972,10 +1096,11 @@ module usb_ind (input clk);
             // device's packet answers a data packet whose CRC16 checks.
             if (m_st != M_IDLE) begin
                 if (m_dev) begin
-                    assert (count_a == 8'd1 && count_b == 8'd1 && m_due && m_data && f_code == {16'h003E, 8'h1C});
+                    assert (count_a == 8'd1 && count_b == 8'd1 && count_c == 8'd1 && m_due && m_data && f_code == {16'h003E, 8'h1C});
                 end else begin
                     assert (count_a == ((at_a > PC_PCNT) ? {7'd0, m_data} : 8'd0)
-                            && count_b == ((at_b > PC_PCNT) ? {7'd0, m_data} : 8'd0) && !m_due);
+                            && count_b == ((at_b > PC_PCNT) ? {7'd0, m_data} : 8'd0)
+                            && count_c == ((at_c > PC_PCNT) ? {7'd0, m_data} : 8'd0) && !m_due);
                     // The PID's byte is the one the host took for it, until it
                     // takes the next.
                     if ((at_a >= PC_PID2 && at_a <= PC_WIDTH) || (at_a >= PC_CSTOP && at_a <= PC_BLOAD
@@ -986,14 +1111,19 @@ module usb_ind (input clk);
                         assert (m_data == (pid_lo == 2'b11));
                 end
             end
-            if (g2) assert (m_crc == 16'h800D && m_it <= dw + dw + 16'd2);
+            if (g2) assert (m_crc == 16'h800D && m_it <= (nodev ? tmo_t : dw + dw + 16'd2));
             if (g3) assert (m_crc != 16'h800D);
+            // After the hold trap each hart's edge is `now`.
+            if (g5 && !m_sop && sq_a) assert (ahead_a == 0 && ahead_b == 0 && ahead_c == 0);
             // Violations: each hart counts a bad data packet as its `crc_bad`
             // runs, a bit and a half after the end of packet.
-            if (g3 && !(rd_a && q_a >= 16'd2)) begin assert (viol_a + 8'd1 == m_nbad || (viol_a == 8'hFF && m_nbad == 8'hFF)); end
+            if ((g3 && !(rd_a && q_a >= 16'd2)) || (g5 && r_tr < 16'd3)) begin assert (viol_a + 8'd1 == m_nbad || (viol_a == 8'hFF && m_nbad == 8'hFF)); end
             else assert (viol_a == m_nbad);
-            if (g3 && !(rd_b && q_b >= 16'd2)) begin assert (viol_b + 8'd1 == m_nbad || (viol_b == 8'hFF && m_nbad == 8'hFF)); end
+            if ((g3 && !(rd_b && q_b >= 16'd2)) || (g5 && r_tr < 16'd3)) begin assert (viol_b + 8'd1 == m_nbad || (viol_b == 8'hFF && m_nbad == 8'hFF)); end
             else assert (viol_b == m_nbad);
+            if ((g3 && !(rd_c && q_c >= 16'd2)) || (g5 && r_tr < 16'd3)) begin assert (viol_c + 8'd1 == m_nbad || (viol_c == 8'hFF && m_nbad == 8'hFF)); end
+            else assert (viol_c == m_nbad);
+            assert (vout_c == viol_c || vout_c + 8'd1 == viol_c);
             assert (vout_a == viol_a || vout_a + 8'd1 == viol_a);
             assert (vout_b == viol_b || vout_b + 8'd1 == viol_b);
 
@@ -1002,18 +1132,20 @@ module usb_ind (input clk);
             // stored it: the listener reads its last bit two ticks later,
             // then stores it, after the stuffed bit if one follows.
             assert (m_pend == ((m_dev ? st_due_a : st_due_b) && m_st == M_PKT));
+            assert (m_pend == (st_due_c && m_st == M_PKT));
             if (m_st != M_PKT) assert (!m_pend);
             // The byte pending is the last one read: in the monitor's register
             // from the end of its last bit on, with that bit until then.
             if (m_pend) assert (m_byte == ((m_bi == 3'd7 && !m_stuff && tq > h) ? m_bytev : m_sh));
 
             // ---- The last fall each hart has seen ----
-            assert (lf_a == lf_b);
+            assert (lf_a == lf_b && lf_a == lf_c);
+            assert (cset_c[13] == (f_seen && (f_age < 16'd1024 || (f_age == 16'd1024 && tr_c))));
             // A hart forgets a fall 1024 ticks on, but not on a tick its hold
             // trap fires.
             assert (cset_a[13] == (f_seen && (f_age < 16'd1024 || (f_age == 16'd1024 && tr_a))));
             assert (cset_b[13] == (f_seen && (f_age < 16'd1024 || (f_age == 16'd1024 && tr_b))));
-            if (cset_a[13] || cset_b[13]) assert (lf_a == now_a - f_age[11:0]);
+            if (cset_a[13] || cset_b[13] || cset_c[13]) assert (lf_a == now_a - f_age[11:0]);
 
             // ---- Each hart's shift register ----
             // The PID's first two bits, then its other six.
@@ -1021,9 +1153,11 @@ module usb_ind (input clk);
             else if (at_a == PC_PBR || at_a == PC_PCNT) begin assert (tx_a == g_tk >> 2); end
             else if (at_a == PC_PID6) begin assert (tx_a == g_tk >> (a_exec ? 4'd2 : k_a + 4'd3)); end
             else assert (tx_a == 0);
-            if (at_b == PC_APID) begin assert (tx_b == 8'hD2 >> (b_exec ? 4'd0 : k_b + 4'd1)); end
+            if (nodev) begin assert (tx_b == 0); end
+            else if (at_b == PC_APID) begin assert (tx_b == 8'hD2 >> (b_exec ? 4'd0 : k_b + 4'd1)); end
             else if (at_b == PC_ASYNC0 || at_b == PC_ASYNC6 || at_b == PC_ASYNCK) begin assert (tx_b == 8'hD2); end
             else assert (tx_b == 0);
+            assert (tx_c == 0);
         end
     end
 endmodule
@@ -1056,6 +1190,7 @@ module usb_view (
     input  [1:0]  tc,
     input         data,       // the host's packet is a data packet
     input         late,       // the device's hold trap fired as it started
+    input         wit,        // this hart is the witness
     input  [23:0] fcode,      // the coder as it was between the last packet and this one
     input  [7:0]  gtk,        // the host's byte
     input         lfv,        // the hart counts its last fall,
@@ -1130,7 +1265,7 @@ module usb_view (
     wire        v_rval = (read && pkt) ? 1'b1 : rval;
     wire        v_rv = !(read && pkt) ? rv : stuff ? 1'b0 : b;
     wire        next_stuff = v_run == 3'd6;
-    wire        joining = !snd && who && st == M_PKT && ph == 0 && bi == 0 && tq < (late ? 12'd3 : 12'd2);
+    wire        joining = !snd && who && !dev && st == M_PKT && ph == 0 && bi == 0 && tq < (late ? 12'd3 : 12'd2);
     // The instruction and bit index of a data bit at (ph, bi): in the host's
     // bytes after the PID a sender sends from BYTE or, after RESTART, CRC; a
     // listener reads every byte with BYTE.
@@ -1230,8 +1365,8 @@ module usb_view (
     wire        c_more = dev && se0 && st == M_PKT;
     // Who drives the cell: its sender, but the second J after the handshake is
     // the host's, two ticks late as the handshake's listener.
-    wire        own = (dev && tail && tc == 2'd1) ? !snd : snd;
-    wire        nxt_own = (dev && tail && tc == 0) ? !snd : snd;     // the owner of the next bit
+    wire        own = wit ? 1'b0 : (dev && tail && tc == 2'd1) ? !snd : snd;
+    wire        nxt_own = wit ? 1'b0 : (dev && tail && tc == 0) ? !snd : snd;     // the owner of the next bit
     // (Every signal it reads is an argument: a simulator re-evaluates a
     // function call only when an argument changes.)
     function automatic tl(input [11:0] q, input [5:0] a, input [3:0] x, input dv, input sn,

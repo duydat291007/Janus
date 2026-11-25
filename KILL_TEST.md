@@ -1756,9 +1756,9 @@ outside it. USB is not proven whole.
 
 `rtl/usb_ind.sv` proves the low-speed USB program the way the other five
 proofs prove theirs: the real program, 48 words taken from the assembler by
-`rtl/gen_usb_rom.py`, on two real harts. Hart a is the host, with a queue;
-hart b is the device, whose one byte to send, the ACK, is in the program. It
-covers what no other proof reaches: the complementary pin pair, NRZI coding,
+`rtl/gen_usb_rom.py`, on three real harts. Hart a is the host, with a queue;
+hart b is the device, whose one byte to send, the ACK, is in the program, or
+a second witness when no device is there; hart c is a witness. It covers what no other proof reaches: the complementary pin pair, NRZI coding,
 stuffing of ones only, a CRC that restarts at all ones and is sent changed by
 `xor`, the CRC16 the host hart computes and sends on RESTART, break bits and
 a listener's jump on a break, a packet's type read from its PID into the
@@ -1868,10 +1868,11 @@ checks, and cocotb 6 of 6.
 Free: the bit time, from 11 to 2047 ticks; the load address; the host's
 queue, with any entries arriving, changing or leaving at any time, data,
 STOP or RESTART; the two unused pins on every tick; and the unwritten program
-words. Assumed: both harts leave reset together with the program's hold trap
-set; the device's queue is empty; and DP and DM are push-pull with the USB
-pull resistors, so the undriven line is J. Nothing is assumed about what the
-host queues or when.
+words. Assumed: the harts leave reset together with the program's hold trap
+set; and DP and DM are push-pull with the USB pull resistors, so the undriven
+line is J. Nothing is assumed about what the host queues or when, or about
+what the device and the witness find in their queues, which they never use.
+Whether a device is there is free too.
 
 What it claims:
 
@@ -1889,14 +1890,19 @@ What it claims:
   meet, and nobody drives either wire from two bit times after an end of
   packet to the next packet, nor before the first.
 - HANDSHAKE. The device answers each data packet whose CRC16 checks, 2 bit
-  times and 2 ticks after its end of packet, and at no other time.
+  times and 2 ticks after its end of packet, and at no other time. The host
+  starts no packet while a handshake is due; with no device there it waits out
+  18 bit times of J.
 - DATA. The device stores each byte of the host's packets as the monitor
   read it, once, before the next byte or the end of packet; the host stores
-  the ACK.
+  the ACK. The witness logs every byte of every packet, on the tick its
+  receiver stores it, and nothing else.
 - VIOLATIONS. Each hart counts exactly the data packets whose CRC16 fails,
-  within two bit times of their end, and nothing else.
-- CLEAN. No hart changes its role, takes as a witness or touches another
-  pin, and the device never takes from its queue.
+  within two bit times of their end, and the handshakes that do not come, 18
+  bit times and 4 ticks after the packet's end, and nothing else.
+- CLEAN. No hart changes its role or touches another pin, the host and the
+  device never take as a witness, the witness never drives a pin, and the
+  device and the witness never take from their queues.
 
 The invariants follow the CAN arbitration proof: each hart is checked
 against the monitor, the packet's sender against the monitor now and the
@@ -1907,42 +1913,55 @@ then claims. A device whose hold trap fires on a packet's second tick runs
 `tmo` and claims, joins a tick later than usual, and is two ticks behind by
 its first bit's middle. The coder after the end of packet is a fixed function
 of where the bus is: the two bits of J, and after a good data packet the
-device's SYNC and ACK, are the same every time. One fact the solver could not find alone: each CRC
-bit the chip sends feeds back `xor`'s bit for that position, whatever the
-register held, so after k bits the register's low k bits follow a fixed
-pattern, and after 16 it holds 0x800D, the residual.
+device's SYNC and ACK, are the same every time. One fact the solver could not
+find alone: each CRC bit the chip sends feeds back `xor`'s bit for that
+position, whatever the register held, so after k bits the register's low k
+bits follow a fixed pattern, and after 16 it holds 0x800D, the residual.
 
-It passes: k-induction at depth 4 with Bitwuzla, 9 minutes
+The witness and the missing device were added to a proof that had the host
+and the device alone. The witness is checked the same way, as a listener to
+every packet: two ticks behind the host as the device is, and two behind the
+device as the host is. With no device, the host and both witnesses wait out
+the hold trap together, and `tmo` and `lost` bring them back to the claim with
+one violation each. Before this the proof never reached `lost`, and no claim
+needed the hold trap.
+
+It passes: k-induction at depth 4 with Bitwuzla, 17 minutes
 (`rtl/prove_usb.sh`). `rtl/sim_usb.sh` checks every claim and invariant once
-a tick: 42 runs at bit times from 11 to 2047 ticks, 5 with the queue driven
-at random every tick and 5 that hold each packet back to start on the tick
-the device's hold trap fires, where 45 packets started in all; 804 data
-packets (402 with a bad CRC16, 181 queued up to 60 bit times after the token),
-387 answered, 9,183 bytes stored, 18.0 million ticks, no failure.
+a tick: 57 runs at bit times from 11 to 2047 ticks, 15 of them with no device,
+8 with the queue driven at random every tick and 8 that hold each packet back
+to start on the tick the device's hold trap fires, where 58 packets started in
+all; 1,087 data packets (587 with a bad CRC16, 265 queued up to 60 bit times
+after the token), 376 answered and 104 never answered, 12,089 bytes stored,
+23.3 million ticks, no failure. A scoreboard outside the harness compares the
+witness's log with what the receivers store.
 
-`rtl/mutate_usb.sh` plants 38 bugs: 24 in the program, 9 in the hart, 4 in
-the monitor's own rules and 1 that weakens an assumption. 37 break the proof.
-36 fail one of the harness's assertions on a real run, among them a data PID
-read from only one of its two bits or with the branch inverted, every packet
-taken as data, no second J after the ACK, the count left at 1 after it, a
-counter that ignores its mask, and either wire, or both after a token, not let
-go (those three also fail the claim that nobody drives the idle bus); the solver breaks bit times of 10 ticks,
-where the instructions between bytes no longer fit in half a bit. No hold
-trap breaks the hold counter's invariant, not a claim: with a device that
-always answers, no claim needs the trap. One survives, as it should: a
-listener that does not check that a break bit is SE0, since with a correct
-sender it always is.
+`rtl/mutate_usb.sh` plants 51 bugs: 28 in the program, 16 in the hart, 5 in
+the monitor's own rules, 1 in which hart sits where and 1 that weakens an
+assumption. 50 break the proof. 49 fail one of the harness's assertions on a
+real run, among them a data PID read from only one of its two bits or with the
+branch inverted, every packet taken as data, no second J after the ACK, the
+count left at 1 after it, a counter that ignores its mask, either wire or both
+after a token not let go, no hold trap or one of 17 bit times, a missing
+handshake not counted, and a witness that logs nothing, stores as a receiver
+does, sends the device's bits, counts no violations or codes every bit as 0.
+The release bugs, and with no device the hold trap, missing handshake, logging
+and violation ones, were checked to fail a claim, not only an invariant.
+The solver breaks bit times of 10 ticks, where the instructions between bytes
+no longer fit in half a bit. One survives, as it should: a listener that does
+not check that a break bit is SE0, since with a correct sender it always is.
 
 The invariants took about 40 counterexamples to write, nearly all values the
 solver was free to choose and a run never reaches. One was a bug in the
 harness itself: a count of ticks since a bit was read, taken before the read,
 wrapped to a large number and switched a hart's drive check off.
 
-Limits: two harts and no witness; with a device always there the host never
-waits out the hold trap, so a missing handshake is checked by `python
-test_usb.py`, not here; the device answers any good data packet, without
-filtering by address or endpoint, as before; both harts start together,
-share one clock and see the line with no propagation delay; no prescaler;
+Limits: one host, one device at most, and one or two witnesses; every sender
+is a Janus hart running the program, so what a witness flags on a faulty bus,
+beyond a bad CRC16 from the host's queue and a missing handshake, is checked
+by `python test_usb.py` and `python test_adversary.py`, not here; the device
+answers any good data packet, without filtering by address or endpoint, as
+before; the harts start together, share one clock and see the line with no propagation delay; no prescaler;
 the queues, pin rotation and host port are outside it.
 
 ## Chip changes after the first green build

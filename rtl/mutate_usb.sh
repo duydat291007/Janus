@@ -22,7 +22,7 @@ mutant() {
 # An assertion that fails on a real run means a claim is false, so the proof
 # cannot pass. A failed assumption does not count. Bugs the simulation does
 # not catch go to the solver.
-SIMS="11:1: 12:2:+noise 16:3: 16:4:+noise 23:5: 13:6:+noise 50:7: 100:8: 16:9:+race"
+SIMS="11:1: 12:2:+noise 16:3: 16:4:+noise 23:5: 13:6:+noise 50:7: 100:8: 16:9:+race 11:10:+nodev 16:11:+nodev 12:12:+nodev"
 one() {
     D="$OUT/m$1"; name="$2"; target="$3"; expr="$4"
     mkdir -p "$D"; cp "$OUT/rom.vh" "$D/usb_rom.vh"; cp janus_hart.v usb_ind.sv usb_ind.sby "$D/"
@@ -81,8 +81,10 @@ mutant "DM not let go after a packet" rom '/6.d42:/ s/32.h03400000/32\x27h9F8000
 mutant "DP not let go after a packet" rom '/6.d43:/ s/32.h01400000/32\x27h9F800000/'
 mutant "the bus not let go after a token" rom '/6.d31:/ s/32.h5600002A/32\x27h56000009/'
 mutant "a hold trap after 2 bit times" rom 's/usb_hold_ticks = 16.d18 \* bit_t;/usb_hold_ticks = 16\x27d2 * bit_t;/'
-# With a device that always answers, the hold trap only ever finds nothing
-# due, so no claim needs it; without it the hold counter's invariant fails.
+mutant "a hold trap after 17 bit times" rom 's/usb_hold_ticks = 16.d18 \* bit_t;/usb_hold_ticks = 16\x27d17 * bit_t;/'
+mutant "a missing handshake not counted" rom '/6.d45:/ s/32.h56000009/32\x27h50000009/'
+mutant "the CRC not restarted before a missing handshake is counted" rom '/6.d46:/ s/32.h92000030/32\x27h9F800000/'
+mutant "idle time counted as a missing handshake" rom '/6.d45:/ s/32.h56000009 + start/32\x27h9F800000/'
 mutant "no hold trap" rom 's/usb_hold = 16.hDA60/usb_hold = 16\x27h5A60/'
 
 # The hart
@@ -94,6 +96,13 @@ mutant "the pair pin driven equal, not complemented" hart 's/if (c_pair_en) driv
 mutant "an NRZI sync bit waits for the level it has" hart 's/val = (c_nrzi \&\& !i_brk) ? !armed\[i_pin\] : src_eff\[0\];/val = (c_nrzi \&\& !i_brk) ? armed[i_pin] : src_eff[0];/'
 mutant "the CRC restarts at 0, not all ones" hart 's/crc = c_init1 ? ~(16.hFFFF << c_width) : 16.d0;/crc = 16\x27d0;/'
 mutant "a counter from received bits ignores its mask" hart 's/masked = rx0 \& ins\[15:8\];/masked = rx0;/'
+mutant "a witness logs nothing" hart 's/else if (role == WITNESS) seen_push_r = 1.b1;/else if (1\x27b0) seen_push_r = 1\x27b1;/'
+mutant "a witness stores as a receiver does" hart 's/if (is_mine(i_party, role)) rx_push_r = 1.b1;/if (is_mine(i_party, role) || role == WITNESS) rx_push_r = 1\x27b1;/'
+mutant "a sender logs as a witness does" hart 's/else if (role == WITNESS) seen_push_r = 1.b1;/else seen_push_r = 1\x27b1;/'
+mutant "a witness sends the bits of the device" hart 's/(r != WITNESS) : (r == party);/(r != WITNESS) : (r == party || (r == WITNESS \&\& party == 2\x27d1));/'
+mutant "a witness counts no violations" hart 's/if (violations_r != 8.hFF) violations_r/if (violations_r != 8\x27hFF \&\& role != WITNESS) violations_r/'
+mutant "a hart with a queue claims whatever its role" hart 's/if ((base_role == i_owner \&\& tx_valid) || !pin\[i_pin\])/if (tx_valid || !pin[i_pin])/'
+mutant "a witness codes every bit as 0" hart 's/(cur_mine \&\& is_mine(i_owner, role)) ? val : seen;/(cur_mine \&\& is_mine(i_owner, role)) ? val : (seen \&\& role != WITNESS);/'
 # With a correct sender a break bit is always SE0, so this one survives.
 mutant "a listener does not check a break bit" hart 's/if (!i_strm \&\& !broke)/if (1\x27b0)/'
 
@@ -101,6 +110,8 @@ mutant "a listener does not check a break bit" hart 's/if (!i_strm \&\& !broke)/
 mutant "monitor's NRZI: a 1 is a change" proof 's/wire       m_b = m_s\[1\] == m_lvl;/wire       m_b = m_s[1] != m_lvl;/'
 mutant "monitor's residual is 0x8005" proof 's/if (m_crc == 16.h800D) m_due <= 1.b1;/if (m_crc == 16\x27h8005) m_due <= 1\x27b1;/'
 mutant "monitor expects the queue's byte even when it is empty" proof 's/if (a_ld) g_tk <= valid_a ? data_a : 8.hFF;/if (a_ld) g_tk <= data_a;/'
+mutant "monitor gives up on a handshake after 17 bit times" proof 's/m_due \&\& m_jr == tmo_t) begin/m_due \&\& m_jr == tmo_t - {5\x27d0, BIT}) begin/'
+mutant "no device, though one is assumed there" proof 's/base_role(nodev ? 2.d3 : 2.d1)/base_role(2\x27d3)/'
 mutant "monitor takes a PID with bit 1 set as data" proof 's/m_data <= m_sh\[7\] \&\& m_b;/m_data <= m_b;/'
 
 # The proof's own assumption: without it, it must fail.

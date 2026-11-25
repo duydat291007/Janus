@@ -38,7 +38,8 @@ CAN proof showed was needed. That chip was laid out locally with the same
 flow, at a placement density of 40% instead of 45% so that it routes in
 normal time, with clean checks and the gate-level test passing. On GitHub,
 at fb666c7, it passed the full Tiny Tapeout flow: layout in 1 h 55 min,
-precheck and gate-level test.
+precheck and gate-level test. The chip has not changed since, and the flow
+passed again at 0e32b0b.
 Everything below was checked in simulation or by formal proof.
 
 - UART, SPI, I2C, 1-Wire and CAN base frames run end to end through the host port,
@@ -98,24 +99,27 @@ Everything below was checked in simulation or by formal proof.
   loses and drops its frame, and both harts store the winner's fields. At 11
   ticks the earlier sender can read the later one's start of frame as its
   first identifier bit.
-- A sixth protocol is proven whole: low-speed USB, a host and a device, for
-  any bit time from 11 ticks. It covers what the others do not use: the
-  complementary pin pair, NRZI, stuffing of ones only, a CRC16 the host
-  computes and sends on RESTART, end-of-packet break bits and the listener's
-  jump on one, a packet type read from its PID into the counter, and the
-  turnaround in which the device answers. A monitor that knows only the
-  textbook rules for a low-speed packet reads SYNC, the bytes the host took,
-  correct stuffing and CRC16, two bit times of SE0, and at least two bit
-  times between packets. No one drives the bus from two bit times after a
-  packet until the next one. The device answers each data packet exactly when
-  its CRC16 checks, stores every byte, and the host stores the ACK. Nothing is
-  assumed about what the host queues or when. Building it exposed three
-  faults in the program, now fixed: the device counted packets to find the
-  data packet, so on one tick a hold-trap timeout split host and device;
-  after the ACK the host's next packet could follow after a little over one
-  bit time, where the USB 2.0 specification asks for two; and the host gave
-  up on a handshake after 17 bit times, not 18. The device now tells a data
-  packet by its PID, still within 48 instructions.
+- A sixth protocol is proven whole, in all three roles at once: low-speed USB,
+  a host, a device or none, and a witness, for any bit time from 11 ticks. It
+  covers what the others do not use: the complementary pin pair, NRZI, stuffing
+  of ones only, a CRC16 the host computes and sends on RESTART, end-of-packet
+  break bits and the listener's jump on one, a packet type read from its PID
+  into the counter, and the turnaround in which the device answers. A monitor
+  that knows only the textbook rules for a low-speed packet reads SYNC, the
+  bytes the host took, correct stuffing and CRC16, two bit times of SE0, and at
+  least two bit times between packets. No one drives the bus from two bit times
+  after a packet until the next one. The device answers each data packet
+  exactly when its CRC16 checks, stores every byte, and the host stores the
+  ACK. The witness drives nothing and logs the same bytes on the same ticks.
+  Every hart counts each bad CRC16 and, when no device is there, each handshake
+  that has not come after 18 bit times, and nothing else. Nothing is assumed
+  about what the host queues or when. Building it exposed three faults in the
+  program, now fixed: the device counted packets to find the data packet, so on
+  one tick a hold-trap timeout split host and device; after the ACK the host's
+  next packet could follow after a little over one bit time, where the USB 2.0
+  specification asks for two; and the host gave up on a handshake after 17 bit
+  times, not 18. The device now tells a data packet by its PID, still within 48
+  instructions.
 - Another unbounded proof covers timed bits, `sync`, stuffing, CRC, NRZI,
   the pin pair and break bits for every program in that subset: the two harts
   stay in step, the listener reads what the owner sent, and neither counts a
@@ -167,6 +171,8 @@ bash prove_spi.sh
 bash prove_onewire.sh
 bash prove_i2c.sh
 bash prove_can.sh
+bash prove_can_arb.sh
+bash prove_usb.sh
 bash sim_uart.sh        # the UART proof's harness, simulated on random inputs
 bash final_check.sh     # every planted-bug set and proof task
 bash chip.sh synth

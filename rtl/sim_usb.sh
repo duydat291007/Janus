@@ -18,7 +18,7 @@ if [ "$#" -ge 2 ]; then
     vvp "$OUT/sim.vvp" +bit=$bit +trace=$n +ticks=$n +seed=$s "$@" | cut -c1-260
     exit 0
 fi
-runs=0; bad=0; trans=0; acks=0; nbad=0; late=0; stored=0; ticks=0; races=0; seed=0
+runs=0; bad=0; trans=0; acks=0; nbad=0; late=0; stored=0; ticks=0; races=0; missed=0; seed=0
 # one BIT [plusargs]: one run, added to the totals.
 one() {
     local bit=$1 out
@@ -29,7 +29,7 @@ one() {
     if [ "$(echo "$out" | grep -c "^OK")" = 1 ] && [ "$(echo "$out" | grep -cE "^(MISMATCH|ERROR)")" = 0 ]; then
         set -- $out
         trans=$((trans + $5)); acks=$((acks + $9)); nbad=$((nbad + ${11})); late=$((late + ${13}))
-        stored=$((stored + ${15})); ticks=$((ticks + ${17})); races=$((races + ${19}))
+        stored=$((stored + ${15})); ticks=$((ticks + ${17})); races=$((races + ${19})); missed=$((missed + ${21}))
     else
         bad=$((bad + 1))
         [ "$bad" -le 4 ] && echo "FAIL bit $bit seed $seed $*: $(echo "$out" | head -3 | tr '\n' ';' | cut -c1-200)"
@@ -41,5 +41,9 @@ done
 for bit in 11 12 16 23 64; do one $bit +noise +trans=30 +ticks=3000000; done
 # Each packet held back to start on the tick the device's hold trap fires.
 for bit in 11 12 16 23 50; do one $bit +race +trans=6 +ticks=1500000; done
-echo "usb sim: $runs runs, $bad failed, $trans data packets ($nbad with a bad CRC16, $late queued late), $acks answered, $stored bytes stored, $races started on the device's trap tick, $ticks ticks"
+# No device: every hart counts each handshake that does not come.
+for bit in 11 12 13 16 17 24 50 217 2047; do one $bit +nodev +trans=20 +ticks=4000000; done
+for bit in 11 16 23; do one $bit +nodev +noise +trans=30 +ticks=3000000; done
+for bit in 11 16 50; do one $bit +nodev +race +trans=6 +ticks=1500000; done
+echo "usb sim: $runs runs, $bad failed, $trans data packets ($nbad with a bad CRC16, $late queued late), $acks answered, $missed never answered, $stored bytes stored, $races started on the device's trap tick, $ticks ticks"
 [ "$bad" -eq 0 ] && [ "$trans" -gt 0 ] || exit 1
