@@ -7,24 +7,53 @@ export PATH="$HOME/oss-cad-suite/bin:$PATH"
 OUT="$HOME/janus-tools/build/spi_mut"
 rm -rf "$OUT"; mkdir -p "$OUT"
 (cd .. && python3 rtl/gen_spi_rom.py "$OUT/rom.vh") > /dev/null || exit 1
-cp spi_ind.sby "$OUT/"
 
 # mutant <name> <file to change: rom, hart or proof> <sed expression>
+# Each runs in its own folder, eight at a time; the results print in order.
+N=0
 mutant() {
-    name="$1"; target="$2"; expr="$3"
-    cp "$OUT/rom.vh" "$OUT/spi_rom.vh"; cp janus_hart.v spi_ind.sv "$OUT/"
+    N=$((N + 1))
+    while [ "$(jobs -rp | wc -l)" -ge 8 ]; do wait -n; done
+    one "$N" "$@" > "$OUT/r$N.txt" &
+}
+# Each bug is first simulated: the proof's harness with the bug in it, on
+# random inputs that keep the proof's assumptions, as sim_spi.sh runs it. An
+# assertion that fails on a real run means the claim is false, so the proof
+# cannot pass. A failed assumption does not count. Bugs the simulation does
+# not catch go to the solver; those that only weaken an assumption always
+# do, since the simulation never breaks one.
+SIMS="+half=8,+cpol=0,+cpha=0,+seed=1 +half=8,+cpol=0,+cpha=1,+seed=2 +half=9,+cpol=1,+cpha=0,+seed=3 +half=13,+cpol=1,+cpha=1,+seed=4 +half=50,+cpol=0,+cpha=0,+seed=5"
+one() {
+    D="$OUT/m$1"; name="$2"; target="$3"; expr="$4"
+    mkdir -p "$D"; cp "$OUT/rom.vh" "$D/spi_rom.vh"; cp janus_hart.v spi_ind.sv spi_ind.sby "$D/"
     case "$target" in
-        rom)   file="$OUT/spi_rom.vh"; orig="$OUT/rom.vh" ;;
-        hart)  file="$OUT/janus_hart.v"; orig=janus_hart.v ;;
-        proof) file="$OUT/spi_ind.sv"; orig=spi_ind.sv ;;
+        rom)   file="$D/spi_rom.vh"; orig="$OUT/rom.vh" ;;
+        hart)  file="$D/janus_hart.v"; orig=janus_hart.v ;;
+        proof) file="$D/spi_ind.sv"; orig=spi_ind.sv ;;
     esac
     sed -i -e "$expr" "$file"
     if cmp -s "$orig" "$file"; then echo "NOT APPLIED $name"; return; fi
-    result=$(cd "$OUT" && sby -f spi_ind.sby h8 2>&1 | grep -E "DONE" | sed 's/.*DONE (\([A-Z]*\).*/\1/')
-    fail=$(cd "$OUT" && grep -hoE "Assert failed in spi_ind: spi_ind.sv:[0-9]+" spi_ind_h8/engine_0/logfile_*.txt 2>/dev/null | head -1 | sed 's/.*sv://')
-    if [ "$result" = "ERROR" ] || [ -z "$result" ]; then echo "NO COMPILE  $name"
+    if ! iverilog -g2012 -DFORMAL -DSPI_SIM -I "$D" -s tb_spi_ind -o "$D/sim.vvp" \
+            tb_spi_ind.v "$D/spi_ind.sv" "$D/janus_hart.v" 2> "$D/iv.log"; then
+        echo "NO COMPILE  $name"; rm -rf "$D"; return
+    fi
+    assumes=$(grep -n "assume (" "$D/spi_ind.sv" | cut -d: -f1 | paste -sd'|')
+    for args in $SIMS; do
+        line=$(vvp "$D/sim.vvp" $(echo "$args" | tr ',' ' ') +bytes=60 +ticks=300000 2>&1 \
+               | grep -oE "^ERROR: [^ ]*spi_ind.sv:[0-9]+" | sed 's/.*sv://' | grep -vxE "$assumes" | head -1)
+        if [ -n "$line" ]; then echo "BROKE PROOF (simulation, $args, line $line) $name"; rm -rf "$D"; return; fi
+    done
+    (cd "$D" && timeout -k 30 5400 sby -f spi_ind.sby h8 > sby.txt 2>&1); code=$?
+    for p in $(pgrep bitwuzla); do
+        case "$(readlink /proc/$p/cwd)" in "$D"*) kill "$p" ;; esac
+    done
+    result=$(grep -E "DONE" "$D/sby.txt" | sed 's/.*DONE (\([A-Z]*\).*/\1/')
+    fail=$(grep -hoE "Assert failed in spi_ind: spi_ind.sv:[0-9]+" "$D"/spi_ind_h8/engine_0/logfile_*.txt 2>/dev/null | head -1 | sed 's/.*sv://')
+    if [ "$code" = 124 ]; then echo "TIMEOUT     $name"
+    elif [ "$result" = "ERROR" ] || [ -z "$result" ]; then echo "NO COMPILE  $name"
     elif [ "$result" = "PASS" ]; then echo "SURVIVED    $name"
     else echo "BROKE PROOF ($result line ${fail:-?}) $name"; fi
+    rm -rf "$D"
 }
 
 # The program
@@ -79,6 +108,15 @@ mutant "the stream refills without keep" rom 's/32.h140ED000/32\x27h140EC000/'
 mutant "both harts swap the two clock phases" hart 's/if (c_cpha) sample_lanes;/if (X) sample_lanes;/; s/if (!c_cpha) sample_lanes;/if (c_cpha) sample_lanes;/; s/if (X) sample_lanes;/if (!c_cpha) sample_lanes;/; s/if (!c_cpha) lanes_out;/if (c_cpha) lanes_out;/'
 mutant "both harts send the least significant bit first" hart 's/if (c_msb) begin val = tx\[7\]; tx = {tx\[6:0\], 1.b0}; end/if (c_msb) begin val = tx[0]; tx = {1\x27b0, tx[7:1]}; end/; s/rx1 = c_msb ? {rx1\[6:0\], b} : {b, rx1\[7:1\]};/rx1 = c_msb ? {b, rx1[7:1]} : {rx1[6:0], b};/; s/rx0 = c_msb ? {rx0\[6:0\], b} : {b, rx0\[7:1\]};/rx0 = c_msb ? {b, rx0[7:1]} : {rx0[6:0], b};/'
 
+# The witness
+mutant "a witness logs nothing" hart 's/if (role == WITNESS) seen_push_r = 1.b1;/if (role == WITNESS) seen_push_r = 1\x27b0;/'
+mutant "a witness stores as a receiver does" hart 's/if (role == WITNESS) seen_push_r = 1.b1;/if (1\x27b0) seen_push_r = 1\x27b1;/'
+mutant "a witness sends the bits of the target" hart 's/(r != WITNESS) : (r == party);/(r != WITNESS) : (r == party || (r == WITNESS \&\& party == 2\x27d1));/'
+mutant "a witness sends the bits of the controller" hart 's/(r != WITNESS) : (r == party);/(r != WITNESS) : (r == party || (r == WITNESS \&\& party == 2\x27d0));/'
+mutant "a hart with a queue claims whatever its role" hart 's/if ((base_role == i_owner \&\& tx_valid) || !pin\[i_pin\])/if (tx_valid || !pin[i_pin])/'
+mutant "a witness logs the first lane only" hart 's/seen_push2_r = 1.b1;/seen_push2_r = 1\x27b0;/'
+mutant "a witness logs the first lane twice" hart 's/push_data2_r = rx1;/push_data2_r = rx0;/'
+
 # The monitor: a wrong idea of SPI must not fit the wire.
 mutant "monitor reads on the other clock edge" proof 's/bus\[1\] == (cpha ? cpol : !cpol);/bus[1] == (cpha ? !cpol : cpol);/'
 mutant "monitor counts seven bits a byte" proof 's/if (m_n == 3.d7) assert/if (m_n == 3\x27d6) assert/'
@@ -89,3 +127,6 @@ mutant "a target queue entry may vanish" proof 's/if (vq_t \&\& !pop_t) assume (
 mutant "half periods below 8 ticks allowed" proof 's/assume (HALF >= MINHALF);/assume (HALF >= 11\x27d4);/'
 mutant "an undriven CS may bounce" proof 's/(\* anyconst \*) wire        flt_cs;/(* anyseq *) wire flt_cs;/'
 mutant "program loaded past the end of memory" proof 's/assume (start <= MAX_START);//'
+
+wait
+for i in $(seq 1 "$N"); do cat "$OUT/r$i.txt"; done

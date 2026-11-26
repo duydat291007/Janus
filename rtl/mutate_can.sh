@@ -47,7 +47,7 @@ one() {
         if [ -n "$line" ]; then echo "BROKE PROOF (simulation, bit $bit${extra:+ $extra}, line $line) $name"; rm -rf "$D"; return; fi
     done
     (cd "$D" && timeout -k 30 10800 sby -f can_ind.sby h8 > sby.txt 2>&1); code=$?
-    for p in $(pgrep yices-smt2); do
+    for p in $(pgrep bitwuzla); do
         case "$(readlink /proc/$p/cwd)" in "$D"*) kill "$p" ;; esac
     done
     result=$(grep -E "DONE" "$D/sby.txt" | sed 's/.*DONE (\([A-Z]*\).*/\1/')

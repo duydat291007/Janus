@@ -29,7 +29,11 @@ module tb_onewire_ind;
     reg [7:0]  written_byte = 0, t_slot = 8'hFF;
     reg        owed = 0;
 
-    onewire_ind dut (.clk(clk), .start(start), .unwritten(unwritten), .addr_c(addr_c),
+    reg        valid_w = 0;          // what the witness finds queued
+    reg [7:0]  data_w = 0;
+    reg [1:0]  ctl_w = 0;
+    integer    logged = 0, presences = 0;
+    onewire_ind dut (.addr_w(addr_c ^ 8'h5A), .valid_w(valid_w), .data_w(data_w), .ctl_w(ctl_w), .clk(clk), .start(start), .unwritten(unwritten), .addr_c(addr_c),
         .addr_t(addr_t), .other(other), .valid_c(valid_c), .valid_t(valid_t),
         .data_c(data_c), .data_t(data_t), .ctl_c(ctl_c), .ctl_t(ctl_t));
 
@@ -94,6 +98,18 @@ module tb_onewire_ind;
             for (i = 0; i < 15; i = i + 1) qt[i] = qt[i + 1];
             nt = nt - 1;
         end
+        // The witness logs what the harts store, and the presence byte.
+        if (dut.push_c && dut.at_c != 29) presences = presences + 1;
+        if (dut.seen_w) begin
+            logged = logged + 1;
+            if (dut.push_t ? dut.pdata_w !== dut.pdata_t
+                : !dut.push_c || (dut.at_c == 29 ? dut.pdata_w !== dut.pdata_c : dut.pdata_w[7] !== dut.pdata_c[7])) begin
+                errors = errors + 1;
+                $display("MISMATCH witness logged %h, target %b %h, controller %b %h", dut.pdata_w,
+                         dut.push_t, dut.pdata_t, dut.push_c, dut.pdata_c);
+            end
+        end
+        {valid_w, data_w, ctl_w} = $random(seed);
         if (dut.push_t) begin                    // the target stored the written byte
             if (!owed || dut.pdata_t !== written_byte) begin
                 errors = errors + 1;
@@ -132,7 +148,7 @@ module tb_onewire_ind;
         ctl_c = $random(seed);
         ctl_t = $random(seed);
         if (written + read >= want_bytes || ticks >= max_ticks) begin
-            if (errors == 0 && written != 0)
+            if (errors == 0 && written != 0 && logged == written + read + presences)
                 $display("OK start %0d resets %0d written %0d read %0d ticks %0d", start, resets,
                          written, read, ticks);
             else

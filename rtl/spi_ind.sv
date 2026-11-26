@@ -1,6 +1,7 @@
 // Unbounded proof by k-induction of a second complete protocol: the SPI
-// program from protocols.py, word for word as the assembler emits it, on two
-// real harts. Hart c is the controller (role C) and hart t the target (role T).
+// program from protocols.py, word for word as the assembler emits it, on
+// three real harts. Hart c is the controller (role C), hart t the target
+// (role T) and hart w a witness, which drives nothing and logs.
 //
 // uart_ind.sv proves a program of timed bits. This one covers what that could
 // not reach: clocked bits, two data lanes moving at once, a byte stream with
@@ -13,16 +14,16 @@
 //   HALF        the half period, any value from MINHALF to 2047 ticks
 //   cpol, cpha  the four SPI modes
 //   start       the address the program is loaded at, 0 to 48
-//   valid, data both queues: any bytes, arriving at any time
+//   valid, data all three queues: any bytes, arriving at any time
 //   flt         what SCK, MOSI and MISO read while undriven, on every tick
 //   flt_cs      what CS reads while undriven
 //   unwritten   what the other 48 program words hold
 //
 // Assumed:
-//   - both harts leave reset on the same tick, with the program's one trap
+//   - the harts leave reset on the same tick, with the program's one trap
 //     set, no prescaler and no adversary fault;
-//   - an entry stays at the head of its queue until the hart pops it, as in
-//     janus_fifo;
+//   - an entry stays at the head of the controller's and the target's queue
+//     until the hart pops it, as in janus_fifo (the witness never uses its own);
 //   - a pin is low if a hart drives it low, high if one drives it high, and
 //     reads its `flt` level otherwise. An undriven CS holds one level, a
 //     pull-up or a pull-down: the trap watches CS from the first tick, so a
@@ -42,7 +43,10 @@
 //          edge the mode names, with both data lines still across that edge.
 //          The clock moves only while CS is low and rests at its idle level
 //          when CS falls and when it rises, and a transfer is whole bytes.
-//   CLEAN  neither hart counts a violation or loses arbitration. The
+//   WITNESS  the witness drives nothing, takes nothing from its queue, and
+//          logs both bytes of each slot, the one on MOSI and the one on MISO,
+//          on the tick the target stores the first.
+//   CLEAN  no hart counts a violation or loses arbitration. The
 //          controller alone drives CS, the clock and MOSI; the target alone
 //          drives MISO, and only during a transfer.
 //   LIVE   a hart rests only in the states listed below. The target follows
@@ -62,7 +66,8 @@
 module spi_ind (input clk, input [10:0] HALF, input cpol, input cpha, input [5:0] start,
                 input [31:0] unwritten, input [7:0] addr_c, addr_t, input flt_cs,
                 input [2:0] flt, input valid_c, valid_t, input [7:0] data_c, data_t,
-                input [1:0] ctl_c, ctl_t);
+                input [1:0] ctl_c, ctl_t,
+                input [7:0] addr_w, input valid_w, input [7:0] data_w, input [1:0] ctl_w);
     parameter MINHALF = 8;
 
     `include "spi_rom.vh"
@@ -82,6 +87,10 @@ module spi_ind (input clk);
     (* anyseq *)   wire        valid_c, valid_t;
     (* anyseq *)   wire [7:0]  data_c, data_t;
     (* anyseq *)   wire [1:0]  ctl_c, ctl_t;
+    (* anyconst *) wire [7:0]  addr_w;
+    (* anyseq *)   wire        valid_w;
+    (* anyseq *)   wire [7:0]  data_w;
+    (* anyseq *)   wire [1:0]  ctl_w;
 `endif
 
     reg [1:0] step = 0;
@@ -105,17 +114,30 @@ module spi_ind (input clk);
     wire        pop_c, pop_t, clear_c, clear_t, push_c, push_t, seen_c, seen_t, seen2_c, seen2_t;
     wire        lost_c, lost_t;
     wire [3:0]  keep_c, keep_t;
+    wire [7:0]  oe_w, ov_w, count_w, rx_w, rx1_w, pin_w, s1_w, armed_w, tx_w, viol_w, vout_w, pdata_w, pdata2_w;
+    wire [87:0] code_w;
+    wire [111:0] cfg_w;
+    wire [47:0] cset_w;
+    wire [10:0] cnt_w;
+    wire [5:0]  pc_w;
+    wire [3:0]  s_w, k_w, prev_w, keep_w;
+    wire [4:0]  partial_w;
+    wire [11:0] now_w, edge_w;
+    wire [1:0]  role_w, src_w;
+    wire        last_w, mine_w, val_w, pop_w, clear_w, push_w, seen_w, seen2_w, lost_w;
 
     // Every pin is push-pull: a hart driving it low wins, one driving it high
-    // sets it otherwise, and with no driver it reads its `flt` level.
+    // sets it otherwise, and with no driver it reads its `flt` level. (The
+    // witness drives nothing, a claim below.)
     wire [3:0]  low = (oe_c[3:0] & ~ov_c[3:0]) | (oe_t[3:0] & ~ov_t[3:0]);
     wire [3:0]  high = (oe_c[3:0] & ov_c[3:0]) | (oe_t[3:0] & ov_t[3:0]);
     wire [7:0]  bus = {4'hF, ~low & (high | {flt, flt_cs})};
 
     // Where each hart is in the program, counted from its first word.
-    wire [5:0]  at_c = pc_c - start, at_t = pc_t - start;
+    wire [5:0]  at_c = pc_c - start, at_t = pc_t - start, at_w = pc_w - start;
     wire [31:0] ins_c = spi_word(at_c, HALF, cpol, cpha, start, unwritten);
     wire [31:0] ins_t = spi_word(at_t, HALF, cpol, cpha, start, unwritten);
+    wire [31:0] ins_w = spi_word(at_w, HALF, cpol, cpha, start, unwritten);
 
     // The host writes the trap register while the harts are still in reset.
     wire        cfg_we = step == 2'd1;
@@ -148,6 +170,20 @@ module spi_ind (input clk);
         .dbg_code(code_t), .dbg_inserted(), .dbg_stuff_bit(), .dbg_width(),
         .dbg_viol(viol_t), .dbg_tx(tx_t), .dbg_cfg(cfg_t), .dbg_cset(cset_t),
         .dbg_cnt(cnt_t), .dbg_rx1(rx1_t), .dbg_prev(prev_t), .dbg_keep(keep_t), .dbg_clean());
+
+    janus_hart w (.clk(clk), .por(por), .rst(rst), .wire_in(bus), .oe(oe_w), .ov(ov_w),
+        .od_mask(8'h00), .base_role(2'd3), .reset_pc(start), .addr_reg(addr_w), .pc(pc_w),
+        .pc_sel(), .ins(ins_w), .tx_valid(valid_w), .tx_ctl(ctl_w), .tx_data(data_w),
+        .tx_pop(pop_w), .tx_clear(clear_w), .rx_push(push_w), .seen_push(seen_w),
+        .seen_push2(seen2_w), .push_data(pdata_w), .push_data2(pdata2_w), .violations(vout_w),
+        .arb_lost(lost_w), .cfg_we(cfg_we), .cfg_addr(3'd0), .cfg_data(trap0),
+        .dbg_s(s_w), .dbg_count(count_w), .dbg_rx(rx_w), .dbg_last(last_w),
+        .dbg_now(now_w), .dbg_edge(edge_w), .dbg_dwell(), .dbg_k(k_w),
+        .dbg_partial(partial_w), .dbg_role(role_w), .dbg_src(src_w), .dbg_mine(mine_w),
+        .dbg_val(val_w), .dbg_pin(pin_w), .dbg_s1(s1_w), .dbg_armed(armed_w),
+        .dbg_code(code_w), .dbg_inserted(), .dbg_stuff_bit(), .dbg_width(),
+        .dbg_viol(viol_w), .dbg_tx(tx_w), .dbg_cfg(cfg_w), .dbg_cset(cset_w),
+        .dbg_cnt(cnt_w), .dbg_rx1(rx1_w), .dbg_prev(prev_w), .dbg_keep(keep_w), .dbg_clean());
 
     localparam S_BOOT = 4'd0, S_EXEC = 4'd1, S_CLAIM = 4'd2, S_SYNC = 4'd3, S_EDGE = 4'd4,
                S_MID = 4'd5, S_ENTER = 4'd8, S_GAP = 4'd9, S_TOP = 4'd10, S_AW = 4'd11,
@@ -187,7 +223,7 @@ module spi_ind (input clk);
     // its queue. The target sends its queue's next byte, or FF when it has
     // none. These follow the harts' own decisions, taken from the state before
     // each tick, and the assertions below tie them to the harts' outputs.
-    reg [7:0]  cur_c = 0, done_c = 0, cur_t = 0;
+    reg [7:0]  cur_c = 0, done_c = 0, cur_t = 0, done_t = 0;
     reg        owe = 0;          // the target has yet to store done_c
     reg        vq_c = 0, vq_t = 0;
     reg [7:0]  dq_c = 0, dq_t = 0;   // each queue's head one tick ago
@@ -247,6 +283,7 @@ module spi_ind (input clk);
         end else begin
             if (c_ends) done_c <= cur_c;
             if (c_loads || (c_ends && valid_c)) cur_c <= valid_c ? data_c : 8'hFF;
+            if (t_ends) done_t <= cur_t;
             if (c_ends) owe <= 1'b1;
             else if (t_ends) owe <= 1'b0;
             if (t_loads || t_ends) cur_t <= valid_t ? data_t : 8'hFF;
@@ -276,6 +313,12 @@ module spi_ind (input clk);
             assert (!seen_c && !seen_t && !seen2_c && !seen2_t);
             // The controller owns CS, SCK and MOSI; the target owns MISO.
             assert (oe_c[7:3] == 0 && oe_t[7:4] == 0 && oe_t[2:0] == 0);
+
+            // WITNESS
+            assert (viol_w == 0 && vout_w == 0 && oe_w == 0 && role_w == 2'd3);
+            assert (!lost_w && !clear_w && !pop_w && !push_w && keep_w == 0);
+            assert (seen_w == push_t && seen2_w == push_t);
+            if (push_t) assert (pdata_w == done_c && pdata2_w == done_t);
 
             // DATA
             if (c_loads) assert (valid_c);
@@ -333,6 +376,13 @@ module spi_ind (input clk);
             assert (cset_t[47:11] == {1'b0, 2'd0, 2'd3, 6'd0, 8'd0, 8'd0, 1'b0, 6'd0, 3'd0});
             assert (now_c == now_t && pin_c == pin_t && s1_c == s1_t);
             assert (at_c < PROG_LEN && at_t < PROG_LEN);
+
+            // The witness is where the target is, in every state: neither owns
+            // the clock or a choice.
+            assert (at_w == at_t && s_w == s_t && k_w == k_t && edge_w == edge_t && now_w == now_t);
+            assert (rx_w == rx_t && rx1_w == rx1_t && armed_w == armed_t && partial_w == partial_t);
+            assert (pin_w == pin_t && s1_w == s1_t && count_w == 0 && cfg_w == cfg_t && code_w == code_t && cset_w == cset_t);
+            if (t_mid) assert (!mine_w && src_w == src_t);
 
             // What the set-up has written so far, in each hart.
             assert (code_c == {63'd0, at_c > PC_MSB, 24'd0});
@@ -453,6 +503,8 @@ module spi_ind (input clk);
                 assert (tx_t == (cur_t << out_t));
                 if (out_t != 0) assert (oe_t[3] && ov_t[3] == cur_t[4'd8 - out_t]);
                 if (in_t != 0) assert ((rx_t & ~(8'hFF << in_t)) == (mosi_byte >> (4'd8 - in_t)));
+                // The byte on MISO, as the witness reads it beside the target.
+                if (in_t != 0) assert ((rx1_t & ~(8'hFF << in_t)) == (cur_t >> (4'd8 - in_t)));
             end
             if (!t_run && at_t != PC_IDLE) assert (!oe_t[3]);
 
@@ -463,6 +515,10 @@ module spi_ind (input clk);
                 assert (s1_c[2] == ov_c[2]);
             if (cpha ? (c_bw && cnt <= d - 12'd5) || c_gap
                      : (c_aw && cnt <= d - 12'd5) || c_bw || c_gap)
+                assert (oe_t[3] && s1_c[3] == ov_t[3]);
+            // In phase 1 the target's bit stays on until its next leading edge,
+            // past the trailing edge the witness reads it on.
+            if (cpha && ((c_aw && cnt >= d - 12'd3 && !t_as) || (at_c == PC_DESELECT && c_exec)))
                 assert (oe_t[3] && s1_c[3] == ov_t[3]);
         end
     end

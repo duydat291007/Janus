@@ -46,7 +46,10 @@ Everything below was checked in simulation or by formal proof.
   and 1-Wire also at real 1 us timing using the prescaler.
 - The Verilog matches the Python model tick for tick, and clock for clock with
   the prescaler set.
-- One protocol is proven whole, in all three roles at once: UART. An
+- All six protocol programs are proven whole, each in all three roles at once:
+  a sender or controller, a receiver or target, and a witness. Each proof
+  runs the program word for word on three real harts.
+- UART was the first proven whole. An
   unbounded proof runs the program word for word on three real harts, a
   sender, a receiver and a witness, for any bit time from 8 ticks, any bytes
   arriving at any time, any load address, and a line that reads anything
@@ -56,21 +59,22 @@ Everything below was checked in simulation or by formal proof.
   frames. Writing it exposed a start-up bug in the
   program, now fixed: on a pin that read low before the first frame, the
   sender could emit a byte nobody queued.
-- A second protocol is proven whole: SPI, controller and target, in all four
-  modes, for any half period from 8 ticks. It covers what UART does not use:
-  clocked bits, two data lines at once, gapless byte streams and a trap. Each
-  side stores the byte the other sent, and a monitor that knows only the
-  textbook rules for the mode reads the same bytes off the wires, and no
-  byte leaves either queue unsent.
-- A third protocol is proven whole: 1-Wire, controller and target, at its
-  real timing. It covers what the other two do not use: an open-drain line
-  both sides pull low, traps on how long the line is held, a loop counter,
-  and a stretch where the two harts are out of step and a trap brings them
-  back. The target stores the byte written, the controller stores each byte
-  read, and a monitor that knows only the textbook rules sees a reset of at
-  least 480 ticks, a presence pulse in its window and those same bytes.
-  Building it exposed a bug, now fixed: a second transaction cleared the
-  target's queue.
+- A second protocol is proven whole, in all three roles at once: SPI,
+  controller, target and witness, in all four modes, for any half period from 8
+  ticks. It covers what UART does not use: clocked bits, two data lines at
+  once, gapless byte streams and a trap. Each side stores the byte the other
+  sent, the witness logs both bytes of every slot, and a monitor that knows
+  only the textbook rules for the mode reads the same bytes off the wires, and
+  no byte leaves either queue unsent.
+- A third protocol is proven whole, in all three roles at once: 1-Wire,
+  controller, target and witness, at its real timing. It covers what the other
+  two do not use: an open-drain line both sides pull low, traps on how long the
+  line is held, a loop counter, and a stretch where the two harts are out of
+  step and a trap brings them back. The target stores the byte written, the
+  controller stores each byte read, the witness logs every byte, and a monitor
+  that knows only the textbook rules sees a reset of at least 480 ticks, a
+  presence pulse in its window and those same bytes. Building it exposed a bug,
+  now fixed: a second transaction cleared the target's queue.
 - A fourth protocol is proven whole, in all three roles at once: I2C,
   controller, target and witness, for any half period from 8 ticks and any
   target address. It covers what the others do not use: START and STOP traps

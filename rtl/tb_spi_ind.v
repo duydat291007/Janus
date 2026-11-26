@@ -36,7 +36,11 @@ module tb_spi_ind;
     // The byte the target is sending in this slot: FF unless it took one.
     reg [7:0]  t_slot = 8'hFF;
 
-    spi_ind dut (.clk(clk), .HALF(HALF), .cpol(cpol), .cpha(cpha), .start(start),
+    reg        valid_w = 0;          // what the witness finds queued
+    reg [7:0]  data_w = 0, last_c = 0;   // last_c: the last byte the controller stored
+    reg [1:0]  ctl_w = 0;
+    integer    logged = 0;
+    spi_ind dut (.addr_w(addr_c ^ 8'h5A), .valid_w(valid_w), .data_w(data_w), .ctl_w(ctl_w), .clk(clk), .HALF(HALF), .cpol(cpol), .cpha(cpha), .start(start),
         .unwritten(unwritten), .addr_c(addr_c), .addr_t(addr_t), .flt_cs(flt_cs), .flt(flt),
         .valid_c(valid_c), .valid_t(valid_t), .data_c(data_c), .data_t(data_t),
         .ctl_c(ctl_c), .ctl_t(ctl_t));
@@ -102,6 +106,14 @@ module tb_spi_ind;
                 nt = nt - 1;
             end
         end
+        if (dut.seen_w || dut.seen2_w) begin     // the witness logged a slot's two bytes
+            if (!dut.seen_w || !dut.seen2_w || owed_n == 0 || dut.pdata_w !== owed[0] || dut.pdata2_w !== last_c) begin
+                errors = errors + 1;
+                $display("MISMATCH witness logged %h %h, sent %h %h", dut.pdata_w, dut.pdata2_w, owed[0], last_c);
+            end
+            logged = logged + 1;
+        end
+        {valid_w, data_w, ctl_w} = $random(seed);
         if (dut.push_t) begin                    // the target stored a byte from MOSI
             if (owed_n == 0 || dut.pdata_t !== owed[0]) begin
                 errors = errors + 1;
@@ -111,6 +123,7 @@ module tb_spi_ind;
             if (owed_n != 0) owed_n = owed_n - 1;
             bytes = bytes + 1;
         end
+        if (dut.push_c) last_c = dut.pdata_c;
         if (dut.push_c) begin                    // the controller stored a byte from MISO
             if (dut.pdata_c !== t_slot) begin
                 errors = errors + 1;
@@ -143,7 +156,7 @@ module tb_spi_ind;
         ctl_c = $random(seed);
         ctl_t = $random(seed);
         if (bytes >= want_bytes || ticks >= max_ticks) begin
-            if (errors == 0 && bytes != 0 && owed_n <= 1)
+            if (errors == 0 && logged == bytes && bytes != 0 && owed_n <= 1)
                 $display("OK half %0d mode %0d%0d start %0d bytes %0d frames %0d target_ff %0d dropped %0d ticks %0d",
                          half, cpol, cpha, start, bytes, frames, ff_bytes, dropped, ticks);
             else

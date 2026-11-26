@@ -5,24 +5,53 @@ export PATH="$HOME/oss-cad-suite/bin:$PATH"
 OUT="$HOME/janus-tools/build/uart_mut"
 rm -rf "$OUT"; mkdir -p "$OUT"
 (cd .. && python3 rtl/gen_uart_rom.py "$OUT/rom.vh") > /dev/null || exit 1
-cp uart_ind.sby "$OUT/"
 
 # mutant <name> <file to change: rom, hart or proof> <sed expression>
+# Each runs in its own folder, eight at a time; the results print in order.
+N=0
 mutant() {
-    name="$1"; target="$2"; expr="$3"
-    cp "$OUT/rom.vh" "$OUT/uart_rom.vh"; cp janus_hart.v uart_ind.sv "$OUT/"
+    N=$((N + 1))
+    while [ "$(jobs -rp | wc -l)" -ge 8 ]; do wait -n; done
+    one "$N" "$@" > "$OUT/r$N.txt" &
+}
+# Each bug is first simulated: the proof's harness with the bug in it, on
+# random inputs that keep the proof's assumptions, as sim_uart.sh runs it. An
+# assertion that fails on a real run means the claim is false, so the proof
+# cannot pass. A failed assumption does not count. Bugs the simulation does
+# not catch go to the solver; those that only weaken an assumption always
+# do, since the simulation never breaks one.
+SIMS="+bit=8,+seed=1 +bit=9,+seed=2 +bit=13,+seed=3 +bit=50,+seed=4 +bit=217,+seed=5"
+one() {
+    D="$OUT/m$1"; name="$2"; target="$3"; expr="$4"
+    mkdir -p "$D"; cp "$OUT/rom.vh" "$D/uart_rom.vh"; cp janus_hart.v uart_ind.sv uart_ind.sby "$D/"
     case "$target" in
-        rom)   file="$OUT/uart_rom.vh"; orig="$OUT/rom.vh" ;;
-        hart)  file="$OUT/janus_hart.v"; orig=janus_hart.v ;;
-        proof) file="$OUT/uart_ind.sv"; orig=uart_ind.sv ;;
+        rom)   file="$D/uart_rom.vh"; orig="$OUT/rom.vh" ;;
+        hart)  file="$D/janus_hart.v"; orig=janus_hart.v ;;
+        proof) file="$D/uart_ind.sv"; orig=uart_ind.sv ;;
     esac
     sed -i -e "$expr" "$file"
     if cmp -s "$orig" "$file"; then echo "NOT APPLIED $name"; return; fi
-    result=$(cd "$OUT" && sby -f uart_ind.sby b8 2>&1 | grep -E "DONE" | sed 's/.*DONE (\([A-Z]*\).*/\1/')
-    fail=$(cd "$OUT" && grep -hoE "Assert failed in uart_ind: uart_ind.sv:[0-9]+" uart_ind_b8/engine_0/logfile_*.txt 2>/dev/null | head -1 | sed 's/.*sv://')
-    if [ "$result" = "ERROR" ] || [ -z "$result" ]; then echo "NO COMPILE  $name"
+    if ! iverilog -g2012 -DFORMAL -DUART_SIM -I "$D" -s tb_uart_ind -o "$D/sim.vvp" \
+            tb_uart_ind.v "$D/uart_ind.sv" "$D/janus_hart.v" 2> "$D/iv.log"; then
+        echo "NO COMPILE  $name"; rm -rf "$D"; return
+    fi
+    assumes=$(grep -n "assume (" "$D/uart_ind.sv" | cut -d: -f1 | paste -sd'|')
+    for args in $SIMS; do
+        line=$(vvp "$D/sim.vvp" $(echo "$args" | tr ',' ' ') +frames=40 +ticks=300000 2>&1 \
+               | grep -oE "^ERROR: [^ ]*uart_ind.sv:[0-9]+" | sed 's/.*sv://' | grep -vxE "$assumes" | head -1)
+        if [ -n "$line" ]; then echo "BROKE PROOF (simulation, $args, line $line) $name"; rm -rf "$D"; return; fi
+    done
+    (cd "$D" && timeout -k 30 5400 sby -f uart_ind.sby b8 > sby.txt 2>&1); code=$?
+    for p in $(pgrep bitwuzla); do
+        case "$(readlink /proc/$p/cwd)" in "$D"*) kill "$p" ;; esac
+    done
+    result=$(grep -E "DONE" "$D/sby.txt" | sed 's/.*DONE (\([A-Z]*\).*/\1/')
+    fail=$(grep -hoE "Assert failed in uart_ind: uart_ind.sv:[0-9]+" "$D"/uart_ind_b8/engine_0/logfile_*.txt 2>/dev/null | head -1 | sed 's/.*sv://')
+    if [ "$code" = 124 ]; then echo "TIMEOUT     $name"
+    elif [ "$result" = "ERROR" ] || [ -z "$result" ]; then echo "NO COMPILE  $name"
     elif [ "$result" = "PASS" ]; then echo "SURVIVED    $name"
     else echo "BROKE PROOF ($result line ${fail:-?}) $name"; fi
+    rm -rf "$D"
 }
 
 # The program
@@ -72,3 +101,6 @@ mutant "a queue entry may vanish" proof 's/if (v_q \&\& !pop_a) assume (valid_a)
 # Addresses wrap, so this placement works too; the assembler refuses it anyway.
 mutant "program loaded past the end of memory (expected to survive)" proof 's/assume (start <= MAX_START);//'
 mutant "bit times below 8 ticks allowed" proof 's/assume (BIT >= MINBIT);/assume (BIT >= 11'"'"'d4);/'
+
+wait
+for i in $(seq 1 "$N"); do cat "$OUT/r$i.txt"; done

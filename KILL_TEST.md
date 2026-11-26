@@ -1061,7 +1061,6 @@ Limits, stated plainly:
   test those.
 - Reachability comes from the simulation. A bounded search to the depth of
   one frame was too slow, at about 13 seconds a step.
-- The other five protocols are not proven whole.
 
 Checks on this version:
 
@@ -1101,8 +1100,8 @@ the third hart and checks the witness's byte against the scoreboard too:
 24 runs, 1,745 frames over 5.4 million ticks, 16 runs
 starting with the line low, no failure.
 
-Limits that remain: all three harts start together and share one clock, bit
-times start at 8 ticks, and the other five protocols are not proven whole.
+Limits that remain: all three harts start together and share one clock, and
+bit times start at 8 ticks.
 
 ### A second protocol proven whole: SPI
 
@@ -1165,8 +1164,8 @@ One assumption turned out not to be needed and was removed: the target's
 queue may even lose entries.
 
 Limits: both harts start together and share one clock; half periods start at
-8 ticks; no witness; the queues, pin rotation and host port are outside it.
-The other four protocols are not proven whole.
+8 ticks; no witness (added later, in "The witness joins the SPI and 1-Wire
+proofs"); the queues, pin rotation and host port are outside it.
 
 ### 1-Wire: a second transaction cleared the target's queue
 
@@ -1256,10 +1255,10 @@ than 0.4 % fast would make the reset shorter than 480 microseconds. Longer
 steps would widen them. The program is unchanged for now.
 
 Limits: both harts start together and share one clock; one target; no
-witness; no prescaler in the proof, so one tick is one clock; the queues,
-pin rotation and host port are outside it. As in SPI, the byte the target
-took ahead when a read ended is never sent. I2C, CAN and USB are not proven
-whole.
+witness (added later, in "The witness joins the SPI and 1-Wire proofs"); no
+prescaler in the proof, so one tick is one clock; the queues, pin rotation and
+host port are outside it. As in SPI, the byte the target took ahead when a
+read ended is never sent.
 
 ### 1-Wire timing margins widened
 
@@ -1378,6 +1377,47 @@ the SPI program no longer uses.
 Cost at synthesis: 8 flip-flops, a 4-bit count in each hart, and 348 cells
 in all, 0.55 % of the area (317,478 to 319,235 square micrometres). Lint
 gives the same warnings as before, none of them about the new code.
+
+### The witness joins the SPI and 1-Wire proofs
+
+Both proofs now run three harts: controller, target and witness, the last
+with a queue of its own that it never uses. In each the witness is where the
+target is on every tick: the same word, state, bit count, bit edge, received
+bytes and sampled levels. Neither owns the clock or a choice. The target's
+own bits take it no other way, because every hart shifts in every data bit
+on the line, its own included. So one equality is nearly all the proof
+needed, as in I2C; each passed on its first solver run.
+
+What each claims of the witness: it drives nothing, counts nothing and takes
+nothing from its queue. In SPI it logs both bytes of every slot, the one on
+MOSI and the one on MISO, on the tick the target stores the first; the MISO
+byte is the one the target sent. In 1-Wire it logs the presence byte, the
+byte written and every byte read, each on the tick the hart it is for stores
+it. The benches compare the witness's log with their own scoreboards.
+
+The same change moved three proofs to faster solver settings. SPI and 1-Wire
+now run Bitwuzla at depth 12, where Yices took 4 minutes and 1 minute 46
+seconds with the witness (both pass); they need depth 12, as their
+invariants do not close at 4. UART runs Bitwuzla at depth 4 and passes in a
+minute, where Yices at depth 12 took about 14. Official runs: SPI 40
+seconds, 1-Wire 38, UART 59. Their planted-bug scripts now run eight bugs at
+a time and simulate each first, as the later proofs' scripts do.
+
+Results. SPI: 56 planted bugs, 7 of them new and aimed at the witness; 55
+break the proof, 49 in simulation and 6 by the solver, and the one survivor
+is the expected one (a refill that leaves its byte queued, which SPI's
+`keep` refills never use). The harness simulation: 52 runs in all four
+modes, 2,972 bytes each way in 212 transfers, no failure. 1-Wire: 59
+planted bugs, 5 new; all 59 break it, 57 in simulation. The harness
+simulation: 20 runs, 59 resets, 59 bytes written and 741 read, no failure.
+UART, unchanged but for the solver: 39 planted bugs, 37 break it, and the
+two expected survivors survive; 24 runs, 1,745 frames, no failure.
+
+In both, the witness bugs fail a claim about the witness, but one: a witness
+that claims the bus like a controller is brought back in step by the next
+start condition before it does anything, and breaks only the equality.
+
+With this, all six protocols are proven whole in all three roles at once.
 
 ### A fourth protocol proven whole: I2C
 

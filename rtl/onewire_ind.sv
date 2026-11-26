@@ -1,6 +1,7 @@
 // Unbounded proof by k-induction of a third complete protocol: the 1-Wire
-// program from protocols.py, word for word as the assembler emits it, on two
-// real harts. Hart c is the controller (role C) and hart t the target (role T).
+// program from protocols.py, word for word as the assembler emits it, on
+// three real harts. Hart c is the controller (role C), hart t the target
+// (role T) and hart w a witness, which drives nothing and logs.
 //
 // uart_ind.sv and spi_ind.sv prove the other two. This one covers what they
 // could not reach: an open-drain line that both harts pull low, traps on how
@@ -15,15 +16,15 @@
 //
 // Free, so the result holds for every choice:
 //   start       the address the program is loaded at, 0 to 34
-//   valid, data both queues: any bytes, arriving at any time
+//   valid, data all three queues: any bytes, arriving at any time
 //   other       the three unused pins, on every tick
 //   unwritten   what the other 34 program words hold
 //
 // Assumed:
-//   - both harts leave reset on the same tick, with the program's two hold
+//   - the harts leave reset on the same tick, with the program's two hold
 //     traps set, no prescaler and no adversary fault;
-//   - an entry stays at the head of its queue until the hart pops it, as in
-//     janus_fifo;
+//   - an entry stays at the head of the controller's and the target's queue
+//     until the hart pops it, as in janus_fifo (the witness never uses its own);
 //   - DQ is open drain with a pull-up: low exactly when a hart drives it low.
 //
 // Claims:
@@ -40,7 +41,10 @@
 //          lasts 60 to 240. The first slot comes at least 480 ticks after
 //          the reset ends. Falls are at least 61 ticks apart, and a reset
 //          starts only between bytes.
-//   CLEAN  neither hart counts a violation or loses arbitration, and neither
+//   WITNESS  the witness drives nothing, takes nothing from its queue, and
+//          logs the presence byte, each byte written and each byte read, on
+//          the tick the hart it is for stores it.
+//   CLEAN  no hart counts a violation or loses arbitration, and none
 //          touches another pin.
 //   LIVE   a hart rests only in the states listed below, and the target is
 //          side by side with the controller everywhere but in `idle` and the
@@ -59,7 +63,8 @@
 module onewire_ind (input clk, input [5:0] start, input [31:0] unwritten,
                     input [7:0] addr_c, addr_t, input [2:0] other,
                     input valid_c, valid_t, input [7:0] data_c, data_t,
-                    input [1:0] ctl_c, ctl_t);
+                    input [1:0] ctl_c, ctl_t,
+                    input [7:0] addr_w, input valid_w, input [7:0] data_w, input [1:0] ctl_w);
     `include "onewire_rom.vh"
 `else
 module onewire_ind (input clk);
@@ -72,6 +77,10 @@ module onewire_ind (input clk);
     (* anyseq *)   wire        valid_c, valid_t;
     (* anyseq *)   wire [7:0]  data_c, data_t;
     (* anyseq *)   wire [1:0]  ctl_c, ctl_t;
+    (* anyconst *) wire [7:0]  addr_w;
+    (* anyseq *)   wire        valid_w;
+    (* anyseq *)   wire [7:0]  data_w;
+    (* anyseq *)   wire [1:0]  ctl_w;
 `endif
 
     // Reset: one tick of power-on reset, then four in which the host writes
@@ -99,14 +108,27 @@ module onewire_ind (input clk);
     wire        pop_c, pop_t, clear_c, clear_t, push_c, push_t, seen_c, seen_t, seen2_c, seen2_t;
     wire        lost_c, lost_t;
     wire [3:0]  keep_c, keep_t;
+    wire [7:0]  oe_w, ov_w, count_w, rx_w, pin_w, s1_w, armed_w, tx_w, viol_w, vout_w, pdata_w;
+    wire [87:0] code_w;
+    wire [111:0] cfg_w;
+    wire [47:0] cset_w;
+    wire [31:0] held_w;
+    wire [5:0]  pc_w;
+    wire [3:0]  s_w, k_w, keep_w;
+    wire [4:0]  partial_w;
+    wire [11:0] now_w, edge_w;
+    wire [1:0]  role_w, src_w;
+    wire        last_w, mine_w, val_w, pop_w, clear_w, push_w, seen_w, seen2_w, lost_w;
 
     // DQ is open drain with a pull-up: low exactly when a hart drives it low.
+    // (The witness drives nothing, a claim below.)
     wire        low = (oe_c[0] && !ov_c[0]) || (oe_t[0] && !ov_t[0]);
     wire [7:0]  bus = {4'hF, other, !low};
 
-    wire [5:0]  at_c = pc_c - start, at_t = pc_t - start;
+    wire [5:0]  at_c = pc_c - start, at_t = pc_t - start, at_w = pc_w - start;
     wire [31:0] ins_c = ow_word(at_c, start, unwritten);
     wire [31:0] ins_t = ow_word(at_t, start, unwritten);
+    wire [31:0] ins_w = ow_word(at_w, start, unwritten);
 
     janus_hart c (.clk(clk), .por(por), .rst(rst), .wire_in(bus), .oe(oe_c), .ov(ov_c),
         .od_mask(8'h01), .base_role(2'd0), .reset_pc(start), .addr_reg(addr_c), .pc(pc_c),
@@ -135,6 +157,20 @@ module onewire_ind (input clk);
         .dbg_code(code_t), .dbg_inserted(), .dbg_stuff_bit(), .dbg_width(),
         .dbg_viol(viol_t), .dbg_tx(tx_t), .dbg_cfg(cfg_t), .dbg_cset(cset_t),
         .dbg_cnt(), .dbg_rx1(), .dbg_prev(), .dbg_held(held_t), .dbg_keep(keep_t), .dbg_clean());
+
+    janus_hart w (.clk(clk), .por(por), .rst(rst), .wire_in(bus), .oe(oe_w), .ov(ov_w),
+        .od_mask(8'h01), .base_role(2'd3), .reset_pc(start), .addr_reg(addr_w), .pc(pc_w),
+        .pc_sel(), .ins(ins_w), .tx_valid(valid_w), .tx_ctl(ctl_w), .tx_data(data_w),
+        .tx_pop(pop_w), .tx_clear(clear_w), .rx_push(push_w), .seen_push(seen_w),
+        .seen_push2(seen2_w), .push_data(pdata_w), .push_data2(), .violations(vout_w),
+        .arb_lost(lost_w), .cfg_we(cfg_we), .cfg_addr(cfg_addr), .cfg_data(cfg_data),
+        .dbg_s(s_w), .dbg_count(count_w), .dbg_rx(rx_w), .dbg_last(last_w),
+        .dbg_now(now_w), .dbg_edge(edge_w), .dbg_dwell(), .dbg_k(k_w),
+        .dbg_partial(partial_w), .dbg_role(role_w), .dbg_src(src_w), .dbg_mine(mine_w),
+        .dbg_val(val_w), .dbg_pin(pin_w), .dbg_s1(s1_w), .dbg_armed(armed_w),
+        .dbg_code(code_w), .dbg_inserted(), .dbg_stuff_bit(), .dbg_width(),
+        .dbg_viol(viol_w), .dbg_tx(tx_w), .dbg_cfg(cfg_w), .dbg_cset(cset_w),
+        .dbg_cnt(), .dbg_rx1(), .dbg_prev(), .dbg_held(held_w), .dbg_keep(keep_w), .dbg_clean());
 
     localparam S_BOOT = 4'd0, S_EXEC = 4'd1, S_CLAIM = 4'd2, S_SYNC = 4'd3, S_EDGE = 4'd4,
                S_MID = 4'd5;
@@ -308,6 +344,14 @@ module onewire_ind (input clk);
             assert (!seen_c && !seen_t && !seen2_c && !seen2_t);
             assert (oe_c[7:1] == 0 && oe_t[7:1] == 0);
 
+            // WITNESS
+            assert (viol_w == 0 && vout_w == 0 && oe_w == 0 && role_w == 2'd3);
+            assert (!lost_w && !clear_w && !pop_w && !push_w && !seen2_w && keep_w == 0);
+            assert (seen_w == (push_t || push_c));
+            if (t_stored) assert (pdata_w == wr);
+            if (c_stored) assert (pdata_w == rd);
+            if (p_stored) assert (!pdata_w[7]);
+
             // DATA
             if (c_loads || c_token) assert (valid_c);
             if (t_stored) assert (pdata_t == wr);
@@ -435,6 +479,14 @@ module onewire_ind (input clk);
             assert (code_c == 0 && code_t == 0);
             assert (now_c == now_t && pin_c == pin_t && s1_c == s1_t && held_c == held_t);
             assert (held_c[31:16] == held_c[15:0]);
+
+            // The witness is where the target is, in every state: neither owns a
+            // choice, and the target's own bits take it no other way.
+            assert (at_w == at_t && s_w == s_t && k_w == k_t && edge_w == edge_t && now_w == now_t);
+            assert (rx_w == rx_t && armed_w == armed_t && partial_w == partial_t && count_w == count_t);
+            assert (pin_w == pin_t && s1_w == s1_t && held_w == held_t && cfg_w == cfg_t && code_w == code_t && cset_w == cset_t);
+            if (t_sync || t_edge || t_mid) assert (!mine_w && src_w == src_t);
+            if (t_sync) assert (val_w == val_t);
 
             // LIVE: where a hart can be, and in which state.
             assert (at_c < PROG_LEN && at_c != PC_HANG && at_c != PC_SUSPECT_JUMP);
@@ -669,10 +721,16 @@ module onewire_ind (input clk);
             if (at_c == PC_R_REST || at_c == PC_R_LOOP)
                 assert ((rx_c >> (count_c[3:0] - 4'd1)) == (rd & ~(8'hFF << (sent + 4'd1))));
             if (at_c == PC_R_STORE) assert (rx_c == rd);
+            // The target reads its own bits back, and so does the witness.
+            if (at_c == PC_R_START || at_c == PC_R_DATA)
+                assert ((rx_t >> count_c[3:0]) == (rd & ~(8'hFF << sent)));
+            if (at_c == PC_R_REST || at_c == PC_R_LOOP)
+                assert ((rx_t >> (count_c[3:0] - 4'd1)) == (rd & ~(8'hFF << (sent + 4'd1))));
+            if (at_c == PC_R_STORE) assert (rx_t == rd);
             // The presence pulse: the target sends a 0 and the controller reads it.
             if (at_c == PC_PRESENCE && c_exec) assert (tx_t == 0);
             if (at_c == PC_PRESENCE && !c_exec) assert (val_t == 0);
-            if (at_c == PC_STORE_PRESENCE) assert (!rx_c[7]);
+            if (at_c == PC_STORE_PRESENCE) assert (!rx_c[7] && !rx_t[7]);
         end
     end
 endmodule

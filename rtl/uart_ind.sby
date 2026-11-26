@@ -3,11 +3,11 @@ b8
 
 [options]
 mode prove
-depth 12
+depth 4
 timeout 3000
 
 [engines]
-smtbmc yices
+smtbmc bitwuzla
 
 [script]
 read -formal janus_hart.v

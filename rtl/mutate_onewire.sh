@@ -7,24 +7,53 @@ export PATH="$HOME/oss-cad-suite/bin:$PATH"
 OUT="$HOME/janus-tools/build/onewire_mut"
 rm -rf "$OUT"; mkdir -p "$OUT"
 (cd .. && python3 rtl/gen_onewire_rom.py "$OUT/rom.vh") > /dev/null || exit 1
-cp onewire_ind.sby "$OUT/"
 
 # mutant <name> <file to change: rom, hart or proof> <sed expression>
+# Each runs in its own folder, eight at a time; the results print in order.
+N=0
 mutant() {
-    name="$1"; target="$2"; expr="$3"
-    cp "$OUT/rom.vh" "$OUT/onewire_rom.vh"; cp janus_hart.v onewire_ind.sv "$OUT/"
+    N=$((N + 1))
+    while [ "$(jobs -rp | wc -l)" -ge 8 ]; do wait -n; done
+    one "$N" "$@" > "$OUT/r$N.txt" &
+}
+# Each bug is first simulated: the proof's harness with the bug in it, on
+# random inputs that keep the proof's assumptions, as sim_onewire.sh runs it. An
+# assertion that fails on a real run means the claim is false, so the proof
+# cannot pass. A failed assumption does not count. Bugs the simulation does
+# not catch go to the solver; those that only weaken an assumption always
+# do, since the simulation never breaks one.
+SIMS="+seed=1 +seed=2 +seed=3 +seed=4"
+one() {
+    D="$OUT/m$1"; name="$2"; target="$3"; expr="$4"
+    mkdir -p "$D"; cp "$OUT/rom.vh" "$D/onewire_rom.vh"; cp janus_hart.v onewire_ind.sv onewire_ind.sby "$D/"
     case "$target" in
-        rom)   file="$OUT/onewire_rom.vh"; orig="$OUT/rom.vh" ;;
-        hart)  file="$OUT/janus_hart.v"; orig=janus_hart.v ;;
-        proof) file="$OUT/onewire_ind.sv"; orig=onewire_ind.sv ;;
+        rom)   file="$D/onewire_rom.vh"; orig="$OUT/rom.vh" ;;
+        hart)  file="$D/janus_hart.v"; orig=janus_hart.v ;;
+        proof) file="$D/onewire_ind.sv"; orig=onewire_ind.sv ;;
     esac
     sed -i -e "$expr" "$file"
     if cmp -s "$orig" "$file"; then echo "NOT APPLIED $name"; return; fi
-    result=$(cd "$OUT" && sby -f onewire_ind.sby h8 2>&1 | grep -E "DONE" | sed 's/.*DONE (\([A-Z]*\).*/\1/')
-    fail=$(cd "$OUT" && grep -hoE "Assert failed in onewire_ind: onewire_ind.sv:[0-9]+" onewire_ind_h8/engine_0/logfile_*.txt 2>/dev/null | head -1 | sed 's/.*sv://')
-    if [ "$result" = "ERROR" ] || [ -z "$result" ]; then echo "NO COMPILE  $name"
+    if ! iverilog -g2012 -DFORMAL -DOW_SIM -I "$D" -s tb_onewire_ind -o "$D/sim.vvp" \
+            tb_onewire_ind.v "$D/onewire_ind.sv" "$D/janus_hart.v" 2> "$D/iv.log"; then
+        echo "NO COMPILE  $name"; rm -rf "$D"; return
+    fi
+    assumes=$(grep -n "assume (" "$D/onewire_ind.sv" | cut -d: -f1 | paste -sd'|')
+    for args in $SIMS; do
+        line=$(vvp "$D/sim.vvp" $(echo "$args" | tr ',' ' ') +bytes=40 +ticks=300000 2>&1 \
+               | grep -oE "^ERROR: [^ ]*onewire_ind.sv:[0-9]+" | sed 's/.*sv://' | grep -vxE "$assumes" | head -1)
+        if [ -n "$line" ]; then echo "BROKE PROOF (simulation, $args, line $line) $name"; rm -rf "$D"; return; fi
+    done
+    (cd "$D" && timeout -k 30 5400 sby -f onewire_ind.sby h8 > sby.txt 2>&1); code=$?
+    for p in $(pgrep bitwuzla); do
+        case "$(readlink /proc/$p/cwd)" in "$D"*) kill "$p" ;; esac
+    done
+    result=$(grep -E "DONE" "$D/sby.txt" | sed 's/.*DONE (\([A-Z]*\).*/\1/')
+    fail=$(grep -hoE "Assert failed in onewire_ind: onewire_ind.sv:[0-9]+" "$D"/onewire_ind_h8/engine_0/logfile_*.txt 2>/dev/null | head -1 | sed 's/.*sv://')
+    if [ "$code" = 124 ]; then echo "TIMEOUT     $name"
+    elif [ "$result" = "ERROR" ] || [ -z "$result" ]; then echo "NO COMPILE  $name"
     elif [ "$result" = "PASS" ]; then echo "SURVIVED    $name"
     else echo "BROKE PROOF ($result line ${fail:-?}) $name"; fi
+    rm -rf "$D"
 }
 
 # The program. 9F800000 is a mode word that writes nothing.
@@ -82,6 +111,13 @@ mutant "timed bit one tick long" hart 's/edge_t = edge_t + i_dwell;/edge_t = edg
 # textbook rule can tell.
 mutant "both harts send the most significant bit first" hart 's/if (c_msb) begin val = tx\[7\]; tx = {tx\[6:0\], 1.b0}; end/if (!c_msb) begin val = tx[7]; tx = {tx[6:0], 1\x27b0}; end/; s/else      rx0 = c_msb ? {rx0\[6:0\], b} : {b, rx0\[7:1\]};/else      rx0 = !c_msb ? {rx0[6:0], b} : {b, rx0[7:1]};/'
 
+# The witness
+mutant "a witness logs nothing" hart 's/else if (role == WITNESS) seen_push_r = 1.b1;/else if (1\x27b0) seen_push_r = 1\x27b1;/'
+mutant "a witness stores as a receiver does" hart 's/if (is_mine(i_party, role)) rx_push_r = 1.b1;/if (is_mine(i_party, role) || role == WITNESS) rx_push_r = 1\x27b1;/'
+mutant "a witness sends the bits of the target" hart 's/(r != WITNESS) : (r == party);/(r != WITNESS) : (r == party || (r == WITNESS \&\& party == 2\x27d1));/'
+mutant "a witness sends the bits of the controller" hart 's/(r != WITNESS) : (r == party);/(r != WITNESS) : (r == party || (r == WITNESS \&\& party == 2\x27d0));/'
+mutant "a hart with a queue claims whatever its role" hart 's/if ((base_role == i_owner \&\& tx_valid) || !pin\[i_pin\])/if (tx_valid || !pin[i_pin])/'
+
 # The monitor: a wrong idea of 1-Wire must not fit the wire.
 mutant "monitor reads the bit in tick 31" proof 's/m_ph == 2.d3 \&\& m_t == 10.d14;/m_ph == 2\x27d3 \&\& m_t == 10\x27d30;/'
 mutant "monitor takes the first bit as the top one" proof 's/{bus\[0\], m_b\[7:1\]}/{m_b[6:0], bus[0]}/g'
@@ -96,3 +132,6 @@ mutant "a controller queue entry may vanish" proof 's/if (vq_c \&\& !pop_c) assu
 mutant "program loaded past the end of memory" proof 's/assume (start <= MAX_START);//'
 mutant "the target cannot pull the line low" proof 's/wire        low = (oe_c\[0\] \&\& !ov_c\[0\]) || (oe_t\[0\] \&\& !ov_t\[0\]);/wire        low = (oe_c[0] \&\& !ov_c[0]);/'
 mutant "the hold traps are never set" proof 's/wire        cfg_we = step >= 3.d1 \&\& step <= 3.d4;/wire        cfg_we = 1\x27b0;/'
+
+wait
+for i in $(seq 1 "$N"); do cat "$OUT/r$i.txt"; done
