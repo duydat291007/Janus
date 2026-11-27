@@ -8,10 +8,12 @@ bash mutate_uart.sh > "$OUT/f_uart.txt" 2>&1 &
 bash mutate_spi.sh > "$OUT/f_spi.txt" 2>&1 &
 bash mutate_onewire.sh > "$OUT/f_onewire.txt" 2>&1 &
 bash mutate_i2c.sh > "$OUT/f_i2c.txt" 2>&1 &
-bash mutate_can.sh > "$OUT/f_can.txt" 2>&1 &
-bash mutate_can_arb.sh > "$OUT/f_can_arb.txt" 2>&1 &
-bash mutate_usb.sh > "$OUT/f_usb.txt" 2>&1 &
 wait
+# The three heaviest sets run one after another: each sends several bugs to
+# the solver at once, and together they would not fit in memory.
+bash mutate_can.sh > "$OUT/f_can.txt" 2>&1
+bash mutate_can_arb.sh > "$OUT/f_can_arb.txt" 2>&1
+bash mutate_usb.sh > "$OUT/f_usb.txt" 2>&1
 echo "--- chip bugs"; echo "caught $(grep -c CAUGHT "$OUT/f_chip.txt")"; grep -vE "^CAUGHT" "$OUT/f_chip.txt" | cut -c1-80
 echo "--- hart bugs"; head -1 "$OUT/f_rtl.txt"; echo "caught $(grep -c CAUGHT "$OUT/f_rtl.txt")"; grep -vE "^CAUGHT|^baseline" "$OUT/f_rtl.txt" | cut -c1-80
 echo "--- proof bugs"; echo "broke $(grep -c BROKE "$OUT/f_proof.txt")"; grep -vE "^BROKE" "$OUT/f_proof.txt" | cut -c1-80

@@ -2063,6 +2063,30 @@ answers any good data packet, without filtering by address or endpoint, as
 before; the harts start together, share one clock and see the line with no propagation delay; no prescaler;
 the queues, pin rotation and host port are outside it.
 
+### The full check, with every proof in all three roles
+
+`rtl/final_check.sh` ran end to end on the design at 4989d7c, after the
+witness joined the last proofs and three proofs moved to Bitwuzla. The CAN,
+CAN arbitration and USB planted-bug sets now run one after another, not
+beside the rest, as together they would not fit in the machine's memory.
+
+| | Result |
+|---|---|
+| Chip planted bugs | 29 of 29 caught |
+| Hart planted bugs | 41 of 41 caught, over 5,028,672 replayed ticks |
+| Subset proof | passes at `dwell` 4, fails at 3; 29 of 30 bugs, 1 expected survivor; all 13 coverage points |
+| UART proof | passes; 37 of 39 bugs, 2 expected survivors; simulation 24 runs clean |
+| SPI proof | passes; 55 of 56 bugs, 1 expected survivor; simulation 52 runs clean |
+| 1-Wire proof | passes; 59 of 59 bugs; simulation 20 runs clean |
+| I2C proof | passes; 52 of 54 bugs, 2 expected survivors; simulation 26 runs clean |
+| CAN proof | passes; 43 of 45 bugs, 2 expected survivors; simulation 76 runs clean |
+| CAN arbitration proof | passes; 23 of 23 bugs; simulation 75 runs clean, two senders 84 runs clean |
+| USB proof | passes; 50 of 51 bugs, 1 expected survivor; simulation 57 runs clean |
+
+Also on the same design: the model tests (42, 9, 16, 20 and 6), the sync
+checker, the hart replay (771 recordings), the chip scenarios (70, with
+1,028 byte checks) and cocotb (6 of 6) all pass.
+
 ## Chip changes after the first green build
 
 ### Host readback for bring-up
