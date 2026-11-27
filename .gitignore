@@ -15,3 +15,7 @@ test/gate_level_netlist.v
 archive/
 __pycache__/
 *.pyc
+fpga/build/
+fpga/basys3/test/sim_build/
+fpga/basys3/test/results.xml
+fpga/basys3/test/run.log

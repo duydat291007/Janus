@@ -17,6 +17,7 @@ peripheral, or a witness that checks the traffic without driving anything.
 | `docs/info.md` | Datasheet page, including the host port |
 | `docs/ISA.md` | Instruction set reference: encodings, traps, timing rules, toolchain |
 | `host/` | Host driver for a PC or a MicroPython board, with an example |
+| `fpga/` | The chip on a Digilent Basys 3: top level, USB-UART bridge, build and bring-up |
 | `demo/` | Interactive demo page built from model traces |
 | `janus.py`, `protocols.py`, `encode.py` | The model, the six protocol programs, and the assembler |
 | `test_*.py`, `reference.py` | Model tests against independent reference devices |
